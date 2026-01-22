@@ -1,0 +1,84 @@
+# ===================================================================
+# Python
+# ===================================================================
+# Virtual Environment
+venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ===================================================================
+# Node.js / React (Vite)
+# ===================================================================
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependency directories
+node_modules/
+
+# Vite build output
+dist/
+
+# Optional ESLint cache
+.eslintcache
+
+# Environment variables - VERY IMPORTANT!
+# Never commit secret keys or environment variables.
+# Instead, create a `.env.example` file to show what variables are needed.
+.env
+.env.*
+.env.local
+.env.*.local
+credentials.json
+token.json
+
+# ===================================================================
+# IDE / Editor
+# ===================================================================
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# ===================================================================
+# Operating System Files
+# ===================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini

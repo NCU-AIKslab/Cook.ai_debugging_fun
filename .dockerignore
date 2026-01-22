@@ -1,0 +1,15 @@
+# 排除 Git 的版本控制資料夾
+.git
+
+# 排除 Python 的虛擬環境資料夾
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 排除 VS Code 的設定檔
+.vscode/
+
+# 排除其他本地快取或日誌檔
+.pytest_cache/
+.DS_Store

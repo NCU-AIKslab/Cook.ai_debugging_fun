@@ -1,0 +1,128 @@
+/* Load fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap');
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Load Tailwind */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global styles */
+body {
+  @apply text-neutral-text-main font-normal bg-theme-background antialiased;
+}
+
+h1 {
+  @apply text-4xl font-bold text-neutral-text-main tracking-tight;
+}
+
+h2 {
+  @apply text-2xl font-semibold text-neutral-text-main;
+}
+
+h3 {
+  @apply text-xl font-semibold text-neutral-text-main;
+}
+
+a {
+  @apply font-medium text-theme-primary transition-colors duration-200;
+}
+
+a:hover {
+  @apply text-theme-primary-hover;
+}
+
+/* Custom utility classes - Gamma Style */
+@layer utilities {
+
+  /* Gradient text for logo */
+  .gradient-text {
+    @apply bg-gradient-to-r from-theme-gradient-start via-theme-gradient-middle to-theme-gradient-end bg-clip-text text-transparent;
+  }
+
+  /* Soft gradient background for main content area */
+  .bg-soft-gradient {
+    background: linear-gradient(135deg, #E0F2FE 0%, #F0FDFA 50%, #FDF4FF 100%);
+  }
+
+  /* Primary button - gradient style */
+  .btn-primary {
+    @apply text-white font-medium px-5 py-2.5 rounded-lg transition-all duration-200;
+    background: linear-gradient(135deg, #0EA5E9 0%, #14B8A6 100%);
+  }
+
+  .btn-primary:hover {
+    @apply -translate-y-0.5;
+    box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3);
+  }
+
+  /* Secondary button */
+  .btn-secondary {
+    @apply bg-transparent border border-neutral-border text-neutral-text-secondary font-medium px-5 py-2.5 rounded-lg transition-all duration-200 hover:bg-theme-surface-hover hover:border-neutral-icon;
+  }
+
+  /* Card - Gamma rounded style */
+  .card {
+    @apply bg-white border border-neutral-border rounded-lg shadow-card transition-all duration-200;
+  }
+
+  .card-hover:hover {
+    @apply border-theme-primary -translate-y-0.5;
+    box-shadow: 0 8px 24px rgba(14, 165, 233, 0.12);
+  }
+
+  /* Status Badge - LangSmith pill style */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-theme-success-light text-theme-success-text;
+  }
+
+  .badge-warning {
+    @apply bg-theme-warning-light text-theme-warning-text;
+  }
+
+  .badge-danger {
+    @apply bg-theme-danger-light text-theme-danger-text;
+  }
+
+  .badge-info {
+    @apply bg-theme-info-light text-theme-info-text;
+  }
+
+  /* Sidebar active state */
+  .sidebar-active {
+    @apply bg-theme-primary-light border-l-3 border-theme-primary text-theme-primary;
+  }
+
+  /* Toast animations */
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.3s ease-out;
+  }
+}

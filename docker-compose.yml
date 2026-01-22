@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: oj-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - sandbox_image
+    env_file:
+      - .env
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: oj-frontend
+    ports:
+      - "3001:3001"
+    restart: always
+
+  sandbox_image:
+    build:
+      context: ./backend/app/agents/debugging/OJ
+      dockerfile: Dockerfile.sandbox
+    image: oj-sandbox-python
+    container_name: sandbox-template
+    restart: "no"

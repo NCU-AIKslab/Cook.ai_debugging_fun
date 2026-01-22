@@ -1,0 +1,17 @@
+FROM python:3.10-slim
+
+# 建立 sandbox user
+RUN useradd -m sandbox
+USER sandbox
+
+WORKDIR /sandbox
+
+# 升級 pip
+RUN pip install --no-cache-dir --upgrade pip
+
+# 建立 sandbox 工作目錄
+RUN mkdir -p /sandbox/work
+
+WORKDIR /sandbox/work
+
+CMD ["python3"]
