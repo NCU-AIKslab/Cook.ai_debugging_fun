@@ -147,16 +147,16 @@ def process_precoding_submission(
         if stage == "logic":
             target_questions = q_data["logic_question"] or []
             response_column = "logic_responses"
-        elif stage == "error_code":
+        elif stage == "explain_code": # [New]
             if current_stage == "logic":
                  raise HTTPException(status_code=403, detail="Logic stage not passed yet")
-            target_questions = q_data["error_code_question"] or []
-            response_column = "error_responses"
-        elif stage == "explain_code": # [New]
-            if current_stage in ["logic", "error_code"]:
-                 raise HTTPException(status_code=403, detail="Previous stages not passed yet")
             target_questions = q_data["explain_code_question"] or []
             response_column = "explain_responses"
+        elif stage == "error_code":
+            if current_stage in ["logic", "explain_code"]:
+                 raise HTTPException(status_code=403, detail="Previous stages not passed yet")
+            target_questions = q_data["error_code_question"] or []
+            response_column = "error_responses"
         else:
             raise HTTPException(status_code=400, detail="Invalid stage")
 
@@ -197,11 +197,11 @@ def process_precoding_submission(
         
         if is_stage_cleared:
             if stage == "logic":
+                new_stage = "explain_code"  # User requested Logic -> Explain -> Error
+            elif stage == "explain_code":
                 new_stage = "error_code"
             elif stage == "error_code":
-                new_stage = "explain_code" # [New] 進入解釋階段
-            elif stage == "explain_code":
-                new_stage = "completed"    # [New] 全部完成
+                new_stage = "completed"
 
         # 9. 寫入資料庫
         update_values = {

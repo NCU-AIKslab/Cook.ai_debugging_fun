@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../../contexts/UserContext';
 import Button from '../common/Button';
+import API_BASE_URL from '../../config/api';
 
 interface LoginModalProps {
     isOpen: boolean;
@@ -12,7 +13,7 @@ interface LoginModalProps {
 export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
     const navigate = useNavigate();
     const { setUser } = useUser();
-    const [form, setForm] = useState({ email: '', password: '' });
+    const [form, setForm] = useState({ stu_id: '', stu_pwd: '' });
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
@@ -24,7 +25,7 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
         setIsLoading(true);
 
         try {
-            const response = await fetch('http://localhost:8001/api/auth/login', {
+            const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(form)
@@ -39,10 +40,9 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
 
             // 儲存使用者資訊
             const userData = {
-                user_id: data.user_id,
-                email: data.email,
-                full_name: data.full_name,
-                role: data.role
+                user_id: data.stu_id,
+                full_name: data.stu_name,
+                role: 'student'
             };
 
             localStorage.setItem('user', JSON.stringify(userData));
@@ -51,21 +51,17 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
             // 關閉 Modal
             onClose();
 
-            // 根據角色導向
-            if (data.role === 'teacher') {
-                navigate('/teacher');
-            } else {
-                navigate('/student');
-            }
+            // 導向學生頁面
+            navigate('/student');
         } catch (err: any) {
-            setError(err.message || '登入失敗，請檢查您的帳號密碼');
+            setError(err.message || '登入失敗，請檢查您的學號密碼');
         } finally {
             setIsLoading(false);
         }
     };
 
     const handleClose = () => {
-        setForm({ email: '', password: '' });
+        setForm({ stu_id: '', stu_pwd: '' });
         setError('');
         onClose();
     };
@@ -119,15 +115,15 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Email
+                                學號
                             </label>
                             <input
-                                type="email"
+                                type="text"
                                 required
-                                value={form.email}
-                                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                                value={form.stu_id}
+                                onChange={(e) => setForm({ ...form, stu_id: e.target.value })}
                                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="your.email@example.com"
+                                placeholder="請輸入學號"
                             />
                         </div>
 
@@ -138,8 +134,8 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
                             <input
                                 type="password"
                                 required
-                                value={form.password}
-                                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                                value={form.stu_pwd}
+                                onChange={(e) => setForm({ ...form, stu_pwd: e.target.value })}
                                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 placeholder="請輸入密碼"
                             />

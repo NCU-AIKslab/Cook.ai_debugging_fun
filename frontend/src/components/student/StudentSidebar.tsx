@@ -1,18 +1,21 @@
 // frontend/src/components/student/StudentSidebar.tsx
 import { useState, useEffect } from 'react';
-import { NavLink } from 'react-router-dom';
-import { FaBookOpen, FaPencilAlt, FaCode, FaChartBar, FaChevronLeft } from 'react-icons/fa';
+import { NavLink, useLocation } from 'react-router-dom';
+import { FaCode, FaChevronLeft, FaChevronDown, FaChevronRight } from 'react-icons/fa';
 
 interface StudentSidebarProps {
-  courseId?: string;
   isSidebarOpen: boolean;
   onToggle: () => void;
 }
 
-function StudentSidebar({ courseId, isSidebarOpen, onToggle }: StudentSidebarProps) {
-  const baseCoursePath = courseId ? `/student/course/${courseId}` : '/student';
-
+function StudentSidebar({ isSidebarOpen, onToggle }: StudentSidebarProps) {
+  const location = useLocation();
   const [isTextVisible, setIsTextVisible] = useState(true);
+  const [isProgrammingOpen, setIsProgrammingOpen] = useState(true);
+
+  // Check if current path is under programming section
+  const isProgrammingActive = location.pathname.includes('/student/pre-coding') ||
+    location.pathname.includes('/student/coding-help');
 
   useEffect(() => {
     if (isSidebarOpen) {
@@ -26,9 +29,16 @@ function StudentSidebar({ courseId, isSidebarOpen, onToggle }: StudentSidebarPro
   }, [isSidebarOpen]);
 
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center h-12 px-4 no-underline rounded-lg font-medium transition-all duration-200 ease-smooth
+    `flex items-center h-10 px-4 no-underline rounded-lg font-medium transition-all duration-200 ease-smooth text-sm
     ${isActive
       ? 'bg-theme-primary-light text-theme-primary-active border-l-3 border-theme-primary'
+      : 'text-neutral-text-secondary hover:bg-theme-surface-hover hover:text-theme-primary'
+    }
+    ${isSidebarOpen ? 'gap-3 pl-10' : 'justify-center'}`;
+
+  const parentMenuClass = `flex items-center h-12 px-4 no-underline rounded-lg font-medium transition-all duration-200 ease-smooth cursor-pointer
+    ${isProgrammingActive
+      ? 'bg-blue-50 text-blue-700'
       : 'text-neutral-text-secondary hover:bg-theme-surface-hover hover:text-theme-primary'
     }
     ${isSidebarOpen ? 'gap-3' : 'justify-center'}`;
@@ -41,13 +51,13 @@ function StudentSidebar({ courseId, isSidebarOpen, onToggle }: StudentSidebarPro
         ${isSidebarOpen ? 'w-64' : 'w-20'} 
       `}
     >
-      <div className={`flex flex-col h-full ${isSidebarOpen ? 'px-6' : 'px-2'}`}>
+      <div className={`flex flex-col h-full ${isSidebarOpen ? 'px-4' : 'px-2'}`}>
 
         {/* Header with toggle */}
         <div
           className={`
             flex items-center mb-6 
-            ${isSidebarOpen ? 'justify-between' : 'justify-center'}
+            ${isSidebarOpen ? 'justify-between px-2' : 'justify-center'}
           `}
         >
           <h3
@@ -74,42 +84,43 @@ function StudentSidebar({ courseId, isSidebarOpen, onToggle }: StudentSidebarPro
 
         <nav>
           <ul className="list-none p-0 m-0 space-y-1">
-            {courseId && (
-              <>
-                <li>
-                  <NavLink to={`${baseCoursePath}/materials`} className={navLinkClass}>
-                    <FaBookOpen className="flex-shrink-0 w-5 h-5" />
-                    <span className={`whitespace-nowrap transition-opacity duration-150 text-sm ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
-                      課程教材
-                    </span>
-                  </NavLink>
-                </li>
-                <li>
-                  <NavLink to={`${baseCoursePath}/assignments`} className={navLinkClass}>
-                    <FaPencilAlt className="flex-shrink-0 w-5 h-5" />
-                    <span className={`whitespace-nowrap transition-opacity duration-150 text-sm ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
-                      練習題與作業
-                    </span>
-                  </NavLink>
-                </li>
-                <li>
-                  <NavLink to={`${baseCoursePath}/coding`} className={navLinkClass}>
-                    <FaCode className="flex-shrink-0 w-5 h-5" />
-                    <span className={`whitespace-nowrap transition-opacity duration-150 text-sm ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
-                      程式練習
-                    </span>
-                  </NavLink>
-                </li>
-                <li>
-                  <NavLink to={`${baseCoursePath}/dashboard`} className={navLinkClass}>
-                    <FaChartBar className="flex-shrink-0 w-5 h-5" />
-                    <span className={`whitespace-nowrap transition-opacity duration-150 text-sm ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
-                      學習儀表板
-                    </span>
-                  </NavLink>
-                </li>
-              </>
-            )}
+            {/* 程式練習 - Parent Menu */}
+            <li>
+              <div
+                className={parentMenuClass}
+                onClick={() => isSidebarOpen && setIsProgrammingOpen(!isProgrammingOpen)}
+              >
+                <FaCode className="flex-shrink-0 w-5 h-5" />
+                <span className={`flex-1 whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
+                  程式練習
+                </span>
+                {isSidebarOpen && (
+                  <span className="text-gray-400">
+                    {isProgrammingOpen ? <FaChevronDown className="w-3 h-3" /> : <FaChevronRight className="w-3 h-3" />}
+                  </span>
+                )}
+              </div>
+
+              {/* Sub-items */}
+              {isSidebarOpen && isProgrammingOpen && (
+                <ul className="list-none p-0 m-0 mt-1 space-y-1">
+                  <li>
+                    <NavLink to="/student/pre-coding" className={navLinkClass}>
+                      <span className={`whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'}`}>
+                        Pre-Coding
+                      </span>
+                    </NavLink>
+                  </li>
+                  <li>
+                    <NavLink to="/student/coding-help" className={navLinkClass}>
+                      <span className={`whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'}`}>
+                        CodingHelp
+                      </span>
+                    </NavLink>
+                  </li>
+                </ul>
+              )}
+            </li>
           </ul>
         </nav>
       </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Student } from './StudentCoding';
+import { useUser } from '../../../contexts/UserContext';
 import Sidebar from '../../../components/student/debugging/Sidebar';
 
 const API_BASE_URL = "http://localhost:8000";
@@ -57,12 +57,15 @@ interface FeedbackState {
     };
 }
 
-interface PreCodingProps {
-    student: Student;
-    onComplete?: () => void;
-}
+const PreCoding: React.FC = () => {
+    const { user } = useUser();
 
-const PreCoding: React.FC<PreCodingProps> = ({ student, onComplete }) => {
+    // 從 UserContext 獲取學生資訊
+    const student = {
+        stu_id: user?.user_id?.toString() || "113522096",
+        name: user?.full_name || "Student"
+    };
+
     // --- 狀態管理 ---
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [selectedProblemId, setSelectedProblemId] = useState<string | null>(null);
@@ -477,8 +480,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student, onComplete }) => {
                             </h2>
                             <p className="text-xs text-gray-500 mt-1">
                                 {pcData ? `進度：${pcData.current_stage === 'completed' ? '已完成' :
-                                    pcData.current_stage === 'explain_code' ? '第三階段' :
-                                        pcData.current_stage === 'error_code' ? '第二階段' :
+                                    pcData.current_stage === 'error_code' ? '第三階段' :
+                                        pcData.current_stage === 'explain_code' ? '第二階段' :
                                             '第一階段'
                                     }` : '載入中...'}
                             </p>
@@ -517,13 +520,13 @@ const PreCoding: React.FC<PreCodingProps> = ({ student, onComplete }) => {
 
                                     {/* 2. 程式碼解釋區塊 (新) */}
                                     <div className="mb-8">
-                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${['logic', 'error_code'].includes(pcData.current_stage) ? 'text-gray-400' : 'text-orange-700'}`}>
-                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${['logic', 'error_code'].includes(pcData.current_stage) ? 'bg-gray-200' : 'bg-orange-100 text-orange-600'}`}>2</span>
+                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${pcData.current_stage === 'logic' ? 'text-gray-400' : 'text-orange-700'}`}>
+                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${pcData.current_stage === 'logic' ? 'bg-gray-200' : 'bg-orange-100 text-orange-600'}`}>2</span>
                                             程式碼解釋 (Code Explanation)
                                         </h2>
 
-                                        {/* 鎖定邏輯：如果還在 logic 或 error_code 階段，顯示鎖頭 */}
-                                        {['logic', 'error_code'].includes(pcData.current_stage) ? (
+                                        {/* 鎖定邏輯：如果還在 logic 階段，顯示鎖頭 */}
+                                        {pcData.current_stage === 'logic' ? (
                                             <LockedSection />
                                         ) : (
                                             pcData.question_data.explain_code_question.map(q => (
@@ -533,13 +536,13 @@ const PreCoding: React.FC<PreCodingProps> = ({ student, onComplete }) => {
                                     </div>
                                     {/* 3. 程式除錯區塊 */}
                                     <div className="mb-8">
-                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${pcData.current_stage === 'logic' ? 'text-gray-400' : 'text-purple-700'}`}>
-                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${pcData.current_stage === 'logic' ? 'bg-gray-200' : 'bg-purple-100 text-purple-600'}`}>3</span>
+                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${['logic', 'explain_code'].includes(pcData.current_stage) ? 'text-gray-400' : 'text-purple-700'}`}>
+                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${['logic', 'explain_code'].includes(pcData.current_stage) ? 'bg-gray-200' : 'bg-purple-100 text-purple-600'}`}>3</span>
                                             程式除錯 (Debugging)
                                         </h2>
 
-                                        {/* 鎖定邏輯：如果還在 logic 階段，顯示單一鎖頭 */}
-                                        {pcData.current_stage === 'logic' ? (
+                                        {/* 鎖定邏輯：如果還在 logic 或 explain_code 階段，顯示鎖頭 */}
+                                        {['logic', 'explain_code'].includes(pcData.current_stage) ? (
                                             <LockedSection />
                                         ) : (
                                             pcData.question_data.error_code_question.map(q => (

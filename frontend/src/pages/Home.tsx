@@ -13,7 +13,7 @@ function Home() {
   const { setUser } = useUser();
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [form, setForm] = useState({ email: '', password: '' });
+  const [form, setForm] = useState({ stu_id: '', stu_pwd: '' });
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -112,33 +112,18 @@ function Home() {
       const data = await response.json();
 
       const userData = {
-        user_id: data.user_id,
-        email: data.email,
-        full_name: data.full_name,
-        role: data.role
+        user_id: data.stu_id,
+        full_name: data.stu_name,
+        role: 'student'
       };
 
       localStorage.setItem('user', JSON.stringify(userData));
       setUser(userData);
 
-      if (data.role === 'teacher') {
-        navigate('/teacher');
-      } else {
-        navigate('/student');
-      }
+      // 導向學生頁面
+      navigate('/student');
     } catch (err: any) {
-      // 檢查是否為帳號狀態相關錯誤
-      const errorMsg = err.message || '';
-
-      if (errorMsg.includes('尚未通過審核') || errorMsg.includes('pending')) {
-        setError('您的帳號尚未通過審核，請耐心等待管理員處理。');
-      } else if (errorMsg.includes('已被拒絕') || errorMsg.includes('rejected')) {
-        setError('您的申請已被拒絕，請聯繫管理員瞭解詳情。');
-      } else if (errorMsg.includes('已被停權') || errorMsg.includes('suspended')) {
-        setError('您的帳號已被停權，請聯繫管理員。');
-      } else {
-        setError(errorMsg || '登入失敗，請檢查您的帳號密碼');
-      }
+      setError(err.message || '登入失敗，請檢查您的學號密碼');
     } finally {
       setIsLoading(false);
     }
@@ -254,15 +239,15 @@ function Home() {
             <form onSubmit={handleLogin} className="space-y-5">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Email
+                  學號
                 </label>
                 <input
-                  type="email"
+                  type="text"
                   required
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  value={form.stu_id}
+                  onChange={(e) => setForm({ ...form, stu_id: e.target.value })}
                   className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder-gray-500"
-                  placeholder="your.email@example.com"
+                  placeholder="請輸入學號"
                 />
               </div>
 
@@ -274,8 +259,8 @@ function Home() {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
-                    value={form.password}
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
+                    value={form.stu_pwd}
+                    onChange={(e) => setForm({ ...form, stu_pwd: e.target.value })}
                     className="w-full px-4 py-3 bg-slate-900/50 border border-slate-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all pr-12 placeholder-gray-500"
                     placeholder="請輸入密碼"
                   />

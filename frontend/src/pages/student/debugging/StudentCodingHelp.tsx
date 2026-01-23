@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import Sidebar from '../../../components/student/debugging/Sidebar';
-import { Student } from './StudentCoding';
+import { useUser } from '../../../contexts/UserContext';
 
 const API_BASE_URL = "http://localhost:8000";
 
@@ -50,10 +50,6 @@ interface PracticeItem {
     answer_config: PracticeConfig;
 }
 
-interface CodingHelpProps {
-    student: Student;
-}
-
 interface QuestionAnswerState {
     [key: string]: number;
 }
@@ -62,12 +58,20 @@ interface QuestionFeedbackState {
     [key: string]: boolean;
 }
 
-const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
+const StudentCodingHelp: React.FC = () => {
+    const { user } = useUser();
+
+    // 從 UserContext 獲取學生資訊
+    const student = {
+        stu_id: user?.user_id?.toString() || "113522096",
+        name: user?.full_name || "Student"
+    };
+
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [selectedProblemId, setSelectedProblemId] = useState<string | null>(null);
     const [problemData, setProblemData] = useState<ProblemDetail | null>(null);
-    
-    const [studentCode, setStudentCode] = useState<string>(""); 
+
+    const [studentCode, setStudentCode] = useState<string>("");
     const [result, setResult] = useState<string | null>(null);
     const [isAccepted, setIsAccepted] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -134,11 +138,11 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                 setStudentCode("");
                 return;
             }
-            
+
             setLoading(true);
-            setResult(null); 
+            setResult(null);
             setIsAccepted(false);
-            
+
             // 重置 Practice State
             setPracticeStatus('locked');
             setPracticeList([]);
@@ -147,7 +151,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
             setFeedbackMap({});
 
             setChatMessages([]);
-            setActiveRightTab('editor'); 
+            setActiveRightTab('editor');
             isPollingRef.current = false;
 
             try {
@@ -156,7 +160,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
 
                 const codeRes = await axios.get(`${API_BASE_URL}/debugging/student_code/${student.stu_id}/${selectedProblemId}`);
                 const { status, data } = codeRes.data;
-                
+
                 if (status === "success") {
                     setStudentCode(data.code || "");
                     setResult(data.result);
@@ -170,7 +174,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                             setPracticeId(pInfo.id);
                             const isCompleted = pInfo.completed;
                             setPracticeStatus(isCompleted ? 'done' : 'todo');
-                            
+
                             if (pInfo.student_answer && Array.isArray(pInfo.student_answer)) {
                                 const ansMap: QuestionAnswerState = {};
                                 const fbMap: QuestionFeedbackState = {};
@@ -227,7 +231,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
             } else {
                 setIsChatLoading(false);
                 if (status === 'no_report') {
-                     setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
+                    setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
                 }
                 isPollingRef.current = false;
             }
@@ -243,7 +247,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
     const handleTabChange = async (tab: 'editor' | 'chatbot' | 'practice') => {
         if (!selectedProblemId) return;
         if (tab === 'practice' && practiceStatus === 'locked') return;
-        
+
         setActiveRightTab(tab);
 
         if (tab === 'chatbot' && chatMessages.length === 0) {
@@ -265,8 +269,8 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                         isPollingRef.current = true;
                         pollForAnalysisResult();
                     } else {
-                         setChatMessages([{ role: 'agent', content: "恭喜您已通過此題！請前往「練習題」分頁進行觀念確認。", type: 'chat' }]);
-                         setIsChatLoading(false);
+                        setChatMessages([{ role: 'agent', content: "恭喜您已通過此題！請前往「練習題」分頁進行觀念確認。", type: 'chat' }]);
+                        setIsChatLoading(false);
                     }
                 }
             } catch (error) {
@@ -279,7 +283,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
     // 3. Run Code
     const handleRunCode = async () => {
         if (!selectedProblemId || isAccepted) return;
-        
+
         setLoading(true);
         setResult(null);
 
@@ -291,25 +295,25 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
             };
             const response = await axios.post(`${API_BASE_URL}/debugging/submit`, payload);
             const { verdict, practice_question } = response.data;
-            
+
             setResult(verdict);
-            
+
             const isAC = verdict === "Accepted" || (typeof verdict === 'string' && verdict.includes("AC"));
 
             if (isAC) {
                 setIsAccepted(true);
-                
+
                 // [修改 3] 處理 AC 後的練習題邏輯
                 if (practice_question && Array.isArray(practice_question) && practice_question.length > 0) {
                     // Case A: 有練習題
                     setPracticeList(practice_question);
-                    setPracticeStatus('todo'); 
+                    setPracticeStatus('todo');
                     setActiveRightTab('practice');
 
                     // 取得 ID 以供後續儲存
                     try {
                         const codeRes = await axios.get(`${API_BASE_URL}/debugging/student_code/${student.stu_id}/${selectedProblemId}`);
-                        if(codeRes.data.data.practice && codeRes.data.data.practice.id) {
+                        if (codeRes.data.data.practice && codeRes.data.data.practice.id) {
                             setPracticeId(codeRes.data.data.practice.id);
                         }
                     } catch (e) {
@@ -323,16 +327,16 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                     setActiveRightTab('practice');
                 }
             } else {
-                if(response.data.message) {
+                if (response.data.message) {
                     console.log("Backend message:", response.data.message);
                 }
             }
-            setChatMessages([]); 
+            setChatMessages([]);
             isPollingRef.current = false;
 
         } catch (error: any) {
             console.error("Run code error:", error);
-            setResult("System Error"); 
+            setResult("System Error");
         } finally {
             setLoading(false);
         }
@@ -450,7 +454,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                                     <div className="mt-6 space-y-4">
                                         {problemData.samples.map((s, i) => (
                                             <div key={i} className="bg-gray-50 p-3 rounded border">
-                                                <div className="text-xs font-bold text-gray-500 mb-2">SAMPLE {i+1}</div>
+                                                <div className="text-xs font-bold text-gray-500 mb-2">SAMPLE {i + 1}</div>
                                                 <div className="space-y-3">
                                                     <div><div className="text-xs text-gray-400 mb-1">INPUT</div><pre className="text-xs bg-white p-2 rounded border overflow-x-auto">{s.input}</pre></div>
                                                     <div><div className="text-xs text-gray-400 mb-1">OUTPUT</div><pre className="text-xs bg-white p-2 rounded border overflow-x-auto">{s.output}</pre></div>
@@ -468,8 +472,8 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                     {/* Right: Tabs */}
                     <div style={{ width: `${100 - leftWidth}%` }} className="flex flex-col bg-gray-50 min-w-0">
                         <div className="flex bg-white border-b border-gray-200">
-                            <button 
-                                onClick={() => handleTabChange('editor')} 
+                            <button
+                                onClick={() => handleTabChange('editor')}
                                 disabled={!isProblemSelected}
                                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors 
                                     ${!isProblemSelected ? 'border-transparent text-gray-300 cursor-not-allowed' : activeRightTab === 'editor' ? 'border-black text-black' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
@@ -477,26 +481,26 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                                 程式編碼
                             </button>
 
-                            <button 
-                                onClick={() => handleTabChange('chatbot')} 
+                            <button
+                                onClick={() => handleTabChange('chatbot')}
                                 disabled={!isProblemSelected}
                                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors 
                                     ${!isProblemSelected ? 'border-transparent text-gray-300 cursor-not-allowed' : activeRightTab === 'chatbot' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                             >
                                 程式修正
                             </button>
-                            
+
                             {/* [修改 4] 練習題 Tab 按鈕邏輯更新 */}
-                            <button 
-                                onClick={() => handleTabChange('practice')} 
-                                disabled={!isProblemSelected || practiceStatus === 'locked'} 
+                            <button
+                                onClick={() => handleTabChange('practice')}
+                                disabled={!isProblemSelected || practiceStatus === 'locked'}
                                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center space-x-2 
-                                    ${!isProblemSelected 
-                                        ? 'border-transparent text-gray-300 cursor-not-allowed' 
-                                        : activeRightTab === 'practice' 
-                                            ? 'border-green-500 text-green-700' 
-                                            : practiceStatus === 'locked' 
-                                                ? 'border-transparent text-gray-300 cursor-not-allowed' 
+                                    ${!isProblemSelected
+                                        ? 'border-transparent text-gray-300 cursor-not-allowed'
+                                        : activeRightTab === 'practice'
+                                            ? 'border-green-500 text-green-700'
+                                            : practiceStatus === 'locked'
+                                                ? 'border-transparent text-gray-300 cursor-not-allowed'
                                                 : 'border-transparent text-gray-500 hover:text-gray-700'
                                     }`}
                             >
@@ -523,9 +527,9 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                                     </div>
                                     <div className="bg-white border-t border-gray-200 p-2 flex justify-between items-center h-14">
                                         <div className="px-2">{renderStatus(result)}</div>
-                                        <button 
-                                            onClick={handleRunCode} 
-                                            disabled={loading || isAccepted || !isProblemSelected} 
+                                        <button
+                                            onClick={handleRunCode}
+                                            disabled={loading || isAccepted || !isProblemSelected}
                                             className={`px-6 py-2 rounded text-sm font-bold text-white transition-colors ${(loading || isAccepted || !isProblemSelected) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
                                         >
                                             {loading ? 'Running...' : isAccepted ? 'Locked' : 'Run Code'}
@@ -550,17 +554,17 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                                         <div ref={chatEndRef} />
                                     </div>
                                     <div className="p-3 border-t bg-white flex space-x-2">
-                                        <input 
-                                            className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100" 
-                                            placeholder="針對錯誤提問..." 
-                                            value={chatInput} 
-                                            onChange={(e) => setChatInput(e.target.value)} 
-                                            onKeyDown={(e) => e.key === 'Enter' && handleSendChat()} 
-                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected} 
+                                        <input
+                                            className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
+                                            placeholder="針對錯誤提問..."
+                                            value={chatInput}
+                                            onChange={(e) => setChatInput(e.target.value)}
+                                            onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected}
                                         />
-                                        <button 
-                                            onClick={handleSendChat} 
-                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected} 
+                                        <button
+                                            onClick={handleSendChat}
+                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected}
                                             className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:bg-gray-300"
                                         >
                                             Send
@@ -591,7 +595,7 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                                                     </div>
                                                 </div>
                                             ) : (
-                                                 <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg text-blue-800 text-sm flex items-center">
+                                                <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg text-blue-800 text-sm flex items-center">
                                                     <span className="text-xl mr-3">💡</span>
                                                     <div>
                                                         <strong>觀念複習</strong>
@@ -629,9 +633,9 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
                                                             {item.options.map(opt => {
                                                                 const isSelected = currentSel === opt.id;
                                                                 const isCorrectOption = opt.id === item.answer_config.correct_id;
-                                                                
+
                                                                 let containerClass = "border-gray-200 hover:bg-gray-50";
-                                                                
+
                                                                 if (isLocked) {
                                                                     if (isCorrectOption) {
                                                                         containerClass = "border-green-500 bg-green-50 ring-1 ring-green-500 cursor-default";
@@ -650,21 +654,21 @@ const StudentCodingHelp: React.FC<CodingHelpProps> = ({ student }) => {
 
                                                                 return (
                                                                     <div key={opt.id}>
-                                                                        <label 
+                                                                        <label
                                                                             className={`flex items-start p-4 rounded-lg border transition-all ${containerClass} ${isLocked ? '' : 'cursor-pointer'}`}
                                                                             onClick={() => !isLocked && handleOptionSelect(qId, opt.id, item.answer_config.correct_id)}
                                                                         >
                                                                             <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center mr-3 shrink-0 ${(isLocked && isCorrectOption) || (isSelected && isCorrectOption) ? 'border-green-600' : isSelected ? 'border-red-500' : 'border-gray-400'}`}>
-                                                                                 {((isLocked && isCorrectOption) || isSelected) && (
+                                                                                {((isLocked && isCorrectOption) || isSelected) && (
                                                                                     <div className={`w-2 h-2 rounded-full ${(isLocked && isCorrectOption) || (isSelected && isCorrectOption) ? 'bg-green-600' : 'bg-red-500'}`}></div>
-                                                                                 )}
+                                                                                )}
                                                                             </div>
                                                                             <div className="flex-1">
                                                                                 <span className={`text-sm font-medium ${isLocked && !isCorrectOption ? 'text-gray-400' : 'text-gray-700'}`}>{opt.label}</span>
                                                                             </div>
                                                                         </label>
                                                                         {isLocked && isCorrectOption && (
-                                                                             <div className="mt-2 ml-8 p-3 bg-green-100 text-green-800 text-sm rounded animate-fadeIn">
+                                                                            <div className="mt-2 ml-8 p-3 bg-green-100 text-green-800 text-sm rounded animate-fadeIn">
                                                                                 <strong>✨ Correct!</strong> {item.answer_config.explanation}
                                                                             </div>
                                                                         )}

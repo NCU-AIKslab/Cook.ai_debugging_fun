@@ -3,15 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 # Import routers
-# from backend.app.routers import debugging_problems  # Temporarily disabled - requires OJ_DATABASE_URL env var
 from backend.app.routers import auth_router
-from backend.app.routers import auth_router
-from backend.app.routers import teacher_agent_router
-from backend.app.routers import teacher_data_router
 from backend.app.routers import debugging 
-
-from backend.app.routers import teacher_testing_router
-from backend.app.routers import teacher_course_router
 
 # --- FastAPI App ---
 
@@ -54,10 +47,7 @@ def health_check():
 # Debugging router (程式輔助系統)
 app.include_router(debugging.router)
 
-# Teacher-side routers (教師端)
-app.include_router(teacher_agent_router.router)
-app.include_router(teacher_data_router.router)
-app.include_router(teacher_course_router.router)
+# Auth router (認證系統)
 app.include_router(auth_router.router)
 
 # To run this server:

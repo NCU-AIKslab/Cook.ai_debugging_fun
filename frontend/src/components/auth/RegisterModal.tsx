@@ -1,7 +1,5 @@
 import { useState } from 'react';
 import RegisterForm from './RegisterForm';
-import { SCHOOLS, type SchoolCode } from '../../constants/departments';
-import API_BASE_URL from '../../config/api';
 
 interface RegisterModalProps {
   isOpen: boolean;
@@ -9,20 +7,8 @@ interface RegisterModalProps {
 }
 
 export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
-  const [activeTab, setActiveTab] = useState<'student' | 'teacher'>('student');
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
-
-  // 教師表單狀態
-  const [teacherForm, setTeacherForm] = useState({
-    email: '',
-    password: '',
-    confirmPassword: '',
-    full_name: '',
-    school: '' as SchoolCode | '',
-  });
-  const [proofDocument, setProofDocument] = useState<File | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
@@ -45,82 +31,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   const handleClose = () => {
     setSuccessMessage('');
     setErrorMessage('');
-    setActiveTab('student');
-    setTeacherForm({
-      email: '',
-      password: '',
-      confirmPassword: '',
-      full_name: '',
-      school: '',
-    });
-    setProofDocument(null);
     onClose();
-  };
-
-  const handleTeacherSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // 驗證表單
-    if (!teacherForm.email || !teacherForm.password || !teacherForm.full_name || !teacherForm.school) {
-      handleError('請填寫所有必填欄位');
-      return;
-    }
-
-    if (teacherForm.password !== teacherForm.confirmPassword) {
-      handleError('密碼不一致');
-      return;
-    }
-
-    if (teacherForm.password.length < 6) {
-      handleError('密碼至少需要 6 個字元');
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      // 從 school code 找出學校名稱
-      const selectedSchool = SCHOOLS.find(s => s.code === teacherForm.school);
-      const institution = selectedSchool?.name || teacherForm.school;
-
-      const formData = new FormData();
-      formData.append('email', teacherForm.email);
-      formData.append('password', teacherForm.password);
-      formData.append('full_name', teacherForm.full_name);
-      formData.append('institution', institution);
-
-      if (proofDocument) {
-        formData.append('proof_document', proofDocument);
-      }
-
-      const response = await fetch(`${API_BASE_URL}/api/auth/register/teacher`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || '註冊失敗');
-      }
-
-      const result = await response.json();
-      handleSuccess(result.message || '註冊申請已送出，請等待管理員審核。');
-
-      // 清空表單
-      setTeacherForm({
-        email: '',
-        password: '',
-        confirmPassword: '',
-        full_name: '',
-        school: '',
-      });
-      setProofDocument(null);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '註冊失敗，請稍後再試';
-      handleError(errorMessage);
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   return (
@@ -128,7 +39,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-2xl font-bold text-gray-800">註冊</h2>
+          <h2 className="text-2xl font-bold text-gray-800">學生註冊</h2>
           <button
             onClick={handleClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -148,30 +59,6 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
               />
             </svg>
           </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="border-b border-gray-200">
-          <div className="flex">
-            <button
-              onClick={() => setActiveTab('student')}
-              className={`flex-1 py-3 px-4 text-center font-medium transition-colors ${activeTab === 'student'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-500 hover:text-gray-700'
-                }`}
-            >
-              學生
-            </button>
-            <button
-              onClick={() => setActiveTab('teacher')}
-              className={`flex-1 py-3 px-4 text-center font-medium transition-colors ${activeTab === 'teacher'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-500 hover:text-gray-700'
-                }`}
-            >
-              教師
-            </button>
-          </div>
         </div>
 
         {/* Body */}
@@ -214,134 +101,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
 
           {/* 表單 */}
           {!successMessage && (
-            <>
-              {activeTab === 'student' ? (
-                <RegisterForm onSuccess={handleSuccess} onError={handleError} />
-              ) : (
-                <form onSubmit={handleTeacherSubmit} className="space-y-4">
-                  {/* 教師註冊提示 */}
-                  <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm">
-                    <p className="font-medium">⚠️ 教師註冊需經過管理員審核</p>
-                    <p className="mt-1 text-xs">註冊後您的帳號將處於待審核狀態，審核通過後即可登入使用。</p>
-                  </div>
-
-                  {/* Email */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Email <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={teacherForm.email}
-                      onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="your.email@example.com"
-                      disabled={isSubmitting}
-                    />
-                  </div>
-
-                  {/* 密碼 */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      密碼 <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      value={teacherForm.password}
-                      onChange={(e) => setTeacherForm({ ...teacherForm, password: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="至少 6 個字元"
-                      disabled={isSubmitting}
-                    />
-                  </div>
-
-                  {/* 確認密碼 */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      確認密碼 <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="password"
-                      required
-                      value={teacherForm.confirmPassword}
-                      onChange={(e) => setTeacherForm({ ...teacherForm, confirmPassword: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="再次輸入密碼"
-                      disabled={isSubmitting}
-                    />
-                  </div>
-
-                  {/* 姓名 */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      姓名 <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={teacherForm.full_name}
-                      onChange={(e) => setTeacherForm({ ...teacherForm, full_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="請輸入真實姓名"
-                      disabled={isSubmitting}
-                    />
-                  </div>
-
-                  {/* 學校 */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      學校 <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      required
-                      value={teacherForm.school}
-                      onChange={(e) => setTeacherForm({ ...teacherForm, school: e.target.value as SchoolCode | '' })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      disabled={isSubmitting}
-                    >
-                      <option value="">請選擇學校</option>
-                      {SCHOOLS.map((school) => (
-                        <option key={school.code} value={school.code}>
-                          {school.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* 證明文件 */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      證明文件 <span className="text-gray-400">(可選)</span>
-                    </label>
-                    <input
-                      type="file"
-                      accept=".pdf,.jpg,.jpeg,.png"
-                      onChange={(e) => setProofDocument(e.target.files?.[0] || null)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      disabled={isSubmitting}
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      請上傳教師證、聘書或其他可證明教師身分的文件
-                    </p>
-                  </div>
-
-                  {/* 提交按鈕 */}
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className={`w-full py-3 px-4 rounded-lg font-medium text-white transition-all ${isSubmitting
-                      ? 'bg-gray-400 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:shadow-lg hover:-translate-y-0.5'
-                      }`}
-                  >
-                    {isSubmitting ? '註冊中...' : '提交審核'}
-                  </button>
-                </form>
-              )}
-            </>
+            <RegisterForm onSuccess={handleSuccess} onError={handleError} />
           )}
         </div>
 
