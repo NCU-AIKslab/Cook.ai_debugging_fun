@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "http://127.0.0.1:5000";
 
 interface Problem {
     _id: string;
@@ -25,15 +25,15 @@ interface SidebarProps {
 }
 
 const STATIC_CHAPTERS: Chapter[] = [
-    { id: "C1", title: "Chapter 1: 變數與輸入輸出" },
-    { id: "C2", title: "Chapter 2: 數值資料與字串資料" },
-    { id: "C3", title: "Chapter 3: List串列資料型態" },
-    { id: "C4", title: "Chapter 4: if條件判斷" },
-    { id: "C5", title: "Chapter 5: for迴圈" },
-    { id: "C6", title: "Chapter 6: while迴圈" },
-    { id: "C7", title: "Chapter 7: dict字典" },
-    { id: "C8", title: "Chapter 8: 函式定義與應用" },
-    { id: "P1", title: "西洋棋" },
+    // { id: "C1", title: "Chapter 1: 變數與輸入輸出" },
+    { id: "CAMP", title: "Winter Camp: 基礎題" },
+    // { id: "C2", title: "Chapter 2: 數值資料與字串資料" },
+    // { id: "C3", title: "Chapter 3: List串列資料型態" },
+    // { id: "C4", title: "Chapter 4: if條件判斷" },
+    // { id: "C5", title: "Chapter 5: for迴圈" },
+    // { id: "C6", title: "Chapter 6: while迴圈" },
+    // { id: "C7", title: "Chapter 7: dict字典" },
+    // { id: "C8", title: "Chapter 8: 函式定義與應用" },
 ];
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, selectedProblemId, onSelectProblem }) => {
@@ -121,8 +121,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, selectedProblemId, onSelectPr
                                             onClick={() => onSelectProblem(problem._id)}
                                             className={`
                                                 w-full text-left px-4 py-2 text-sm transition-colors border-l-4 flex items-center gap-2
-                                                ${selectedProblemId === problem._id 
-                                                    ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium' 
+                                                ${selectedProblemId === problem._id
+                                                    ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
                                                     : 'border-transparent text-gray-600 hover:bg-gray-50'
                                                 }
                                             `}

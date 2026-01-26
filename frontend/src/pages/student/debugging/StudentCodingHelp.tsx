@@ -3,7 +3,7 @@ import axios from 'axios';
 import Sidebar from '../../../components/student/debugging/Sidebar';
 import { useUser } from '../../../contexts/UserContext';
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "http://127.0.0.1:5000";
 
 // --- Interfaces ---
 interface ProblemDetail {
@@ -269,7 +269,7 @@ const StudentCodingHelp: React.FC = () => {
                         isPollingRef.current = true;
                         pollForAnalysisResult();
                     } else {
-                        setChatMessages([{ role: 'agent', content: "恭喜您已通過此題！請前往「練習題」分頁進行觀念確認。", type: 'chat' }]);
+                        setChatMessages([{ role: 'agent', content: "恭喜您已通過此題！請前往「練習題」分頁進行練習", type: 'chat' }]);
                         setIsChatLoading(false);
                     }
                 }
@@ -446,11 +446,11 @@ const StudentCodingHelp: React.FC = () => {
                         <div className="p-6">
                             {problemData ? (
                                 <div className="prose max-w-none text-sm text-gray-700">
-                                    <div dangerouslySetInnerHTML={{ __html: problemData.description }} />
-                                    <h4 className="font-bold mt-4 mb-2">Input</h4>
-                                    <div dangerouslySetInnerHTML={{ __html: problemData.input_description }} />
-                                    <h4 className="font-bold mt-4 mb-2">Output</h4>
-                                    <div dangerouslySetInnerHTML={{ __html: problemData.output_description }} />
+                                    <div className="text-gray-600 text-base" dangerouslySetInnerHTML={{ __html: problemData.description }} />
+                                    <h4 className="text-base font-bold mt-4 mb-2">輸入說明</h4>
+                                    <div className="text-gray-600 text-base" dangerouslySetInnerHTML={{ __html: problemData.input_description }} />
+                                    <h4 className="text-base font-bold mt-4 mb-2">輸出說明</h4>
+                                    <div className="text-gray-600 text-base" dangerouslySetInnerHTML={{ __html: problemData.output_description }} />
                                     <div className="mt-6 space-y-4">
                                         {problemData.samples.map((s, i) => (
                                             <div key={i} className="bg-gray-50 p-3 rounded border">
@@ -463,7 +463,7 @@ const StudentCodingHelp: React.FC = () => {
                                         ))}
                                     </div>
                                 </div>
-                            ) : <div className="text-gray-400 text-center mt-10">Select a problem from the sidebar</div>}
+                            ) : <div className="text-gray-400 text-center mt-10">請從左側列表選擇一個題目</div>}
                         </div>
                     </div>
 
@@ -591,15 +591,14 @@ const StudentCodingHelp: React.FC = () => {
                                                     <span className="text-2xl mr-3">🎉</span>
                                                     <div>
                                                         <strong>恭喜全數通過！</strong>
-                                                        <p>您已完成本單元的所有觀念複習。</p>
                                                     </div>
                                                 </div>
                                             ) : (
                                                 <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg text-blue-800 text-sm flex items-center">
                                                     <span className="text-xl mr-3">💡</span>
                                                     <div>
-                                                        <strong>觀念複習</strong>
-                                                        <p>請逐一完成以下觀念題，答對後系統將自動鎖定該題。</p>
+                                                        <strong>練習題</strong>
+                                                        <p>請逐一完成以下題目，答對後系統將自動鎖定該題</p>
                                                     </div>
                                                 </div>
                                             )}

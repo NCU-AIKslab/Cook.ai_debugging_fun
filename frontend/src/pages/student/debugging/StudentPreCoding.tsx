@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useUser } from '../../../contexts/UserContext';
 import Sidebar from '../../../components/student/debugging/Sidebar';
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "http://127.0.0.1:5000";
 
 // --- 1. 介面定義 (對應後端資料結構) ---
 
@@ -419,17 +419,16 @@ const PreCoding: React.FC = () => {
                         <div className="flex-1 overflow-y-auto p-6">
                             {problemData ? (
                                 <>
-                                    <h3 className="text-xl font-bold text-gray-800 mb-4">{problemData.title}</h3>
                                     <div className="text-gray-600 mb-6 leading-relaxed whitespace-pre-wrap prose max-w-none" dangerouslySetInnerHTML={{ __html: problemData.description }} />
 
                                     <div className="mb-6 grid grid-cols-1 gap-4">
                                         <div>
-                                            <h4 className="text-sm font-bold text-gray-700 mb-1">輸入說明</h4>
-                                            <div className="text-gray-600 text-sm" dangerouslySetInnerHTML={{ __html: problemData.input_description }} />
+                                            <h4 className="text-base font-bold text-gray-700 mb-1">輸入說明</h4>
+                                            <div className="text-gray-600 text-base" dangerouslySetInnerHTML={{ __html: problemData.input_description }} />
                                         </div>
                                         <div>
-                                            <h4 className="text-sm font-bold text-gray-700 mb-1">輸出說明</h4>
-                                            <div className="text-gray-600 text-sm" dangerouslySetInnerHTML={{ __html: problemData.output_description }} />
+                                            <h4 className="text-base font-bold text-gray-700 mb-1">輸出說明</h4>
+                                            <div className="text-gray-600 text-base" dangerouslySetInnerHTML={{ __html: problemData.output_description }} />
                                         </div>
                                     </div>
 
@@ -456,7 +455,7 @@ const PreCoding: React.FC = () => {
                                     </div>
                                 </>
                             ) : (
-                                <div className="text-gray-400 mt-20 text-center">請從左側列表選擇一個題目。</div>
+                                <div className="text-gray-400 mt-20 text-center">請從左側列表選擇一個題目</div>
                             )}
                         </div>
                     </div>
@@ -567,12 +566,12 @@ const PreCoding: React.FC = () => {
                                                 <div className="border border-gray-300 rounded-xl overflow-hidden shadow-sm">
                                                     <div className="bg-gray-100 px-4 py-2 border-b border-gray-300 flex justify-between items-center">
                                                         <span className="font-bold text-gray-700 text-sm">📄 Template Code</span>
-                                                        <button
+                                                        {/* <button
                                                             onClick={() => navigator.clipboard.writeText(getTemplateContent(pcData.template))}
                                                             className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
                                                         >
-                                                            複製代碼
-                                                        </button>
+                                                            複製
+                                                        </button> */}
                                                     </div>
                                                     {/* 使用 whitespace-pre 搭配 overflow-auto 實現橫向捲軸 */}
                                                     <pre className="bg-[#1e1e1e] text-gray-100 p-4 text-sm font-mono overflow-auto max-h-[500px] leading-relaxed whitespace-pre">

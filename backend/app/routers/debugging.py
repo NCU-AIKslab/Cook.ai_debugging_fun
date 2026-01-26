@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Path, Depends, BackgroundTasks
 from typing import Optional, List, Dict, Any
-import json
+import json, re
 import logging
 from sqlalchemy import select, desc, insert, text
 from pydantic import BaseModel
@@ -68,6 +68,19 @@ class PracticeSubmitListRequest(BaseModel):
     practice_id: int
     answers: List[PracticeAnswerItem]
 
+def clean_markdown_filter(text: str) -> str:
+    """去除字串中的 Markdown 標記語法"""
+    if not text:
+        return ""
+    # 去除粗體、斜體 (**, *, __, _)
+    text = re.sub(r'(\*\*|\*|__|_)替換', r'', text) 
+    # 更完整的過濾：去除粗體符號但保留文字內容
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text) # 將 **文字** 轉為 文字
+    text = re.sub(r'\*(.*?)\*', r'\1', text)     # 將 *文字* 轉為 文字
+    # 去除標題符號 (#)
+    text = re.sub(r'#+\s?', '', text)
+    return text.strip()
+
 # ==========================================
 # Helper: Background Task for Error Diagnosis
 # ==========================================
@@ -106,8 +119,8 @@ async def run_background_diagnosis_task(initial_state: Dict, submission_num: int
                     student_id=student_id,
                     problem_id=problem_id,
                     num=submission_num, 
-                    student_question=None, # 主動推播
-                    agent_reply={"content": scaffold_response, "type": "scaffold"},
+                    student_question=None, 
+                    agent_reply={"content": clean_markdown_filter(scaffold_response), "type": "scaffold"},
                     zpd_level=zpd
                 ))
             logger.info(f"Background Task - Diagnosis & Scaffold saved for {student_id}")
@@ -175,7 +188,7 @@ async def submit_code(
                 f"Error: {failed_case.error}"
             )
 
-    # 取得歷史報告 (Context)
+    # 取得歷史報告 取最近的3份 (Context)
     previous_reports = []
     try:
         with engine.connect() as conn:
@@ -464,6 +477,7 @@ async def chat_with_agent(payload: ChatRequest):
         latest_num = get_submission_count(payload.student_id, payload.problem_id)
         
         with engine.connect() as conn:
+            # evidence report
             stmt_rep = select(evidence_report_table).where(
                 evidence_report_table.c.student_id == payload.student_id,
                 evidence_report_table.c.problem_id == payload.problem_id,
@@ -475,6 +489,7 @@ async def chat_with_agent(payload: ChatRequest):
             if report_row:
                 context_report = report_row._mapping["evidence_report"]
             
+            # zpd level
             stmt_zpd = select(dialogue_table.c.zpd_level).where(
                  dialogue_table.c.student_id == payload.student_id,
                  dialogue_table.c.problem_id == payload.problem_id,
@@ -482,25 +497,38 @@ async def chat_with_agent(payload: ChatRequest):
             ).limit(1)
             zpd_val = conn.execute(stmt_zpd).scalar() or 1
 
-            stmt_dial = select(dialogue_table).where(
-                dialogue_table.c.student_id == payload.student_id,
-                dialogue_table.c.problem_id == payload.problem_id,
-                dialogue_table.c.num == latest_num 
-            ).order_by(dialogue_table.c.id.asc()) 
-            history_rows = conn.execute(stmt_dial).fetchall()
+            # dialogue history (前一個回覆 & 學生現在提問)
+            stmt_dial = (
+                select(dialogue_table)
+                .where(
+                    dialogue_table.c.student_id == payload.student_id,
+                    dialogue_table.c.problem_id == payload.problem_id
+                )
+                .order_by(dialogue_table.c.id.desc())  
+                .limit(2)                             
+            )
+
+            history_rows = conn.execute(stmt_dial).fetchall() 
 
         problem_info_raw = get_problem_by_id(payload.problem_id)
         problem_context = f"Problem: {problem_info_raw.get('title')}\nDesc: {problem_info_raw.get('description')}"
+        zpd, strategy = (1, "引導學生思考修正邏輯，可提供部分範例。") if zpd_val == 1 else (2, "給予具體提示。") if zpd_val == 2 else (3, "僅給予方向性提示。")
 
         messages = [
             SystemMessage(content=f"""
-            You are a coding tutor. 
-            Context: The student is asking about submission #{latest_num}.
-            Problem Info: {problem_context}
-            Diagnosis: {json.dumps(context_report)}
-            Current ZPD Level: {zpd_val}
+            你是一位程式設計輔導老師，請根據前一個回覆和學生現在提問，提供適當的引導。
+
+            題目資訊：{problem_context}**注意**:輸出格式需參考sampls
+            學生錯誤程式碼診斷結果：{json.dumps(context_report)}
             
-            Goal: Answer the student's question based on the diagnosis. Do not give the code directly.
+            【教學策略 (ZPD 等級 {zpd})】: {strategy}
+
+            請遵守：
+            1. 使用繁體中文，**簡單明瞭**，條列式回覆，不帶任何情緒。
+            2. 嚴禁使用 Markdown 語法。
+            3. 依照策略強度提供引導，不要直接給出完整正確答案。
+            4. **不可回答與題目無相關問題**
+
             """)
         ]
 
@@ -514,18 +542,18 @@ async def chat_with_agent(payload: ChatRequest):
         messages.append(HumanMessage(content=payload.message))
 
         response = await chat_llm.ainvoke(messages)
-
+        clean_reply = clean_markdown_filter(response.content)
         with engine.begin() as conn:
             conn.execute(insert(dialogue_table).values(
                 student_id=payload.student_id,
                 problem_id=payload.problem_id,
                 num=latest_num, 
                 student_question={"content": payload.message},
-                agent_reply={"content": response.content, "type": "chat"},
+                agent_reply={"content": clean_reply, "type": "chat"},
                 zpd_level=zpd_val
             ))
 
-        return {"reply": response.content}
+        return {"reply": clean_reply}
 
     except Exception as e:
         logger.error(f"Chat Error: {e}")
