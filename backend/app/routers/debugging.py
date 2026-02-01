@@ -25,6 +25,7 @@ from backend.app.agents.debugging.db import (
 
 from backend.app.agents.debugging.oj_models import get_problems_by_chapter, get_problem_by_id
 from backend.app.agents.debugging.pre_coding import get_student_precoding_state, process_precoding_submission
+from backend.app.agents.debugging.pre_coding.manager import PreCodingManager
 
 # --- Graph Import ---
 from backend.app.agents.debugging.graph import app_graph
@@ -67,6 +68,11 @@ class PracticeAnswerItem(BaseModel):
 class PracticeSubmitListRequest(BaseModel):
     practice_id: int
     answers: List[PracticeAnswerItem]
+
+class PreCodingChatRequest(BaseModel):
+    student_id: str
+    problem_id: str
+    message: str
 
 def clean_markdown_filter(text: str) -> str:
     """去除字串中的 Markdown 標記語法"""
@@ -317,6 +323,43 @@ def submit_precoding_answer_endpoint(payload: PreCodingSubmitRequest):
         )
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==========================================
+# Pre-Coding Chatbot API (新增：對話式引導)
+# ==========================================
+
+@router.get("/precoding/logic/status/{problem_id}")
+def get_precoding_logic_status_endpoint(
+    problem_id: str, 
+    student_id: str = Query(..., description="Student ID")
+):
+    """取得學生在 Pre-Coding Logic 階段的狀態（對話紀錄與進度）"""
+    try:
+        session = PreCodingManager.get_or_create_session(student_id, problem_id)
+        return {
+            "status": "success",
+            "data": session
+        }
+    except Exception as e:
+        logger.error(f"PreCoding Logic Status Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/precoding/logic/chat")
+async def precoding_logic_chat_endpoint(payload: PreCodingChatRequest):
+    """處理學生的聊天訊息（Pre-Coding Logic 階段）"""
+    try:
+        result = await PreCodingManager.process_chat(
+            payload.student_id, 
+            payload.problem_id, 
+            payload.message
+        )
+        return {
+            "status": "success",
+            "data": result
+        }
+    except Exception as e:
+        logger.error(f"PreCoding Logic Chat Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/student_code/{student_id}/{problem_id}")

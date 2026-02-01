@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { useUser } from '../../../contexts/UserContext';
-import Sidebar from '../../../components/student/debugging/Sidebar';
+import { useUser } from '../../../contexts/UserContext'; // 假設路徑正確
+import Sidebar from '../../../components/student/debugging/Sidebar'; // 假設路徑正確
 
-const API_BASE_URL = "http://127.0.0.1:5000";
+const API_BASE_URL = "http://127.0.0.1:8000";
 
-// --- 1. 介面定義 (對應後端資料結構) ---
+// --- 1. 介面定義 ---
 
 interface Option {
     id: number;
@@ -33,6 +33,25 @@ interface StudentResponse {
     is_correct: boolean;
 }
 
+// 對話紀錄介面
+interface ChatMessage {
+    role: 'agent' | 'student';
+    content: string;
+    stage: string;
+    score: number;
+    timestamp: string;
+}
+
+// Logic 對話狀態
+interface LogicChatState {
+    status: 'new' | 'existing';
+    current_stage: 'UNDERSTANDING' | 'DECOMPOSITION' | 'COMPLETED';
+    current_score: number;
+    is_completed: boolean;
+    chat_log: ChatMessage[];
+    suggested_replies?: string[];
+}
+
 interface PreCodingState {
     current_stage: 'logic' | 'error_code' | 'explain_code' | 'completed';
     is_completed: boolean;
@@ -49,7 +68,6 @@ interface PreCodingState {
     template?: any;
 }
 
-// 用於暫存提交後的回饋
 interface FeedbackState {
     [questionId: string]: {
         feedback: string;
@@ -57,11 +75,19 @@ interface FeedbackState {
     };
 }
 
-const PreCoding: React.FC = () => {
+// 新增 Props 定義以配合 StudentCoding.tsx
+interface PreCodingProps {
+    student?: {
+        stu_id: string;
+        name: string;
+    };
+}
+
+const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     const { user } = useUser();
 
-    // 從 UserContext 獲取學生資訊
-    const student = {
+    // 優先使用 props 傳入的 student，如果沒有則使用 UserContext，最後 fallback
+    const student = propStudent || {
         stu_id: user?.user_id?.toString() || "113522096",
         name: user?.full_name || "Student"
     };
@@ -71,23 +97,35 @@ const PreCoding: React.FC = () => {
     const [selectedProblemId, setSelectedProblemId] = useState<string | null>(null);
     const [problemData, setProblemData] = useState<any>(null);
 
+    // Tab 狀態
+    const [activeTab, setActiveTab] = useState<'concept' | 'implementation'>('concept');
+
+    // 舊版 Pre-Coding 狀態
     const [pcData, setPcData] = useState<PreCodingState | null>(null);
     const [pcLoading, setPcLoading] = useState(false);
     const [submittingIds, setSubmittingIds] = useState<Set<string>>(new Set());
 
-    // 解析回饋狀態 (含 LocalStorage 讀取邏輯)
+    // Logic Chat 狀態
+    const [logicChatState, setLogicChatState] = useState<LogicChatState | null>(null);
+    const [chatInput, setChatInput] = useState('');
+    const [isSendingChat, setIsSendingChat] = useState(false);
+    const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
+    const chatContainerRef = useRef<HTMLDivElement>(null);
+
+    // IME 狀態 (中文輸入法)
+    const [isComposing, setIsComposing] = useState(false);
+
     const [feedbackMap, setFeedbackMap] = useState<FeedbackState>({});
     const [error, setError] = useState<string | null>(null);
 
-    // --- 版面伸縮狀態 ---
+    // 版面伸縮狀態
     const [leftWidth, setLeftWidth] = useState(50);
     const [isDragging, setIsDragging] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // --- Helper: LocalStorage Key ---
+    // --- Helper Functions ---
     const getStorageKey = (pId: string) => `precoding_feedback_${student.stu_id}_${pId}`;
 
-    // --- Helper: 處理 Template 顯示內容 (修正 JSON 顯示問題) ---
     const getTemplateContent = (tmpl: any) => {
         if (!tmpl) return "";
         if (typeof tmpl === 'string') return tmpl;
@@ -95,6 +133,8 @@ const PreCoding: React.FC = () => {
         if (tmpl.code) return tmpl.code;
         return JSON.stringify(tmpl, null, 2);
     };
+
+    const isLogicCompleted = logicChatState?.is_completed || false;
 
     // --- 拖拉處理邏輯 ---
     const startResizing = useCallback(() => setIsDragging(true), []);
@@ -123,6 +163,13 @@ const PreCoding: React.FC = () => {
         };
     }, [isDragging]);
 
+    // 自動滾動到底部
+    useEffect(() => {
+        if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+    }, [logicChatState?.chat_log]);
+
     // --- 資料抓取與初始化 ---
     useEffect(() => {
         const fetchData = async () => {
@@ -131,8 +178,11 @@ const PreCoding: React.FC = () => {
             setError(null);
             setPcData(null);
             setProblemData(null);
+            setLogicChatState(null);
+            setSuggestedReplies([]);
+            setActiveTab('concept');
 
-            // 1. 嘗試從 LocalStorage 恢復該題目的解析紀錄
+            // 1. 嘗試從 LocalStorage 恢復回饋紀錄
             try {
                 const savedFeedback = localStorage.getItem(getStorageKey(selectedProblemId));
                 if (savedFeedback) {
@@ -145,7 +195,7 @@ const PreCoding: React.FC = () => {
                 setFeedbackMap({});
             }
 
-            // 2. 載入左側題目描述
+            // 2. 載入題目資訊
             try {
                 const res = await axios.get(`${API_BASE_URL}/debugging/problems/${selectedProblemId}`);
                 setProblemData(res.data);
@@ -153,8 +203,25 @@ const PreCoding: React.FC = () => {
                 console.warn("左側題目載入失敗", err);
             }
 
-            // 3. 載入右側 Pre-Coding 狀態
+            // 3. 載入 Logic Chat 狀態
             setPcLoading(true);
+            try {
+                const logicRes = await axios.get(`${API_BASE_URL}/debugging/precoding/logic/status/${selectedProblemId}`, {
+                    params: { student_id: student.stu_id }
+                });
+
+                if (logicRes.data.status === 'success') {
+                    const data = logicRes.data.data;
+                    setLogicChatState(data);
+                    if (data.is_completed) {
+                        setActiveTab('implementation');
+                    }
+                }
+            } catch (err) {
+                console.warn("Logic Chat 載入失敗", err);
+            }
+
+            // 4. 載入舊版 Pre-Coding 狀態
             try {
                 const res = await axios.get(`${API_BASE_URL}/debugging/precoding/${selectedProblemId}`, {
                     params: { student_id: student.stu_id }
@@ -162,17 +229,17 @@ const PreCoding: React.FC = () => {
 
                 const rawData = res.data;
                 if (!rawData || !rawData.question_data) {
-                    throw new Error("後端回傳資料結構缺漏");
+                    // throw new Error("後端回傳資料結構缺漏"); 
+                    // 容錯處理：若無舊版資料，可能只是純對話題
                 }
 
                 if (rawData.template && typeof rawData.template === 'string') {
                     try { rawData.template = JSON.parse(rawData.template); } catch { }
                 }
-
                 setPcData(rawData);
             } catch (err: any) {
                 console.error("Fetch Error:", err);
-                setError(err.response?.status === 404 ? "無題目：此單元尚未建立觀念引導" : `載入錯誤: ${err.message}`);
+                // 不一定報錯，可能只有 Logic Chat
             } finally {
                 setPcLoading(false);
             }
@@ -181,7 +248,91 @@ const PreCoding: React.FC = () => {
         fetchData();
     }, [selectedProblemId, student.stu_id]);
 
-    // --- 提交邏輯 ---
+    // --- Chat 送出邏輯 ---
+    const handleSendChat = async (messageOverride?: string) => {
+        const userMessage = messageOverride || chatInput.trim();
+        if (!userMessage || isSendingChat || !selectedProblemId) return;
+
+        setChatInput('');
+        setSuggestedReplies([]);
+        setIsSendingChat(true);
+
+        // Optimistic UI update
+        setLogicChatState(prev => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                chat_log: [
+                    ...prev.chat_log,
+                    {
+                        role: 'student' as const,
+                        content: userMessage,
+                        stage: prev.current_stage,
+                        score: prev.current_score,
+                        timestamp: new Date().toISOString()
+                    }
+                ]
+            };
+        });
+
+        try {
+            const res = await axios.post(`${API_BASE_URL}/debugging/precoding/logic/chat`, {
+                student_id: student.stu_id,
+                problem_id: selectedProblemId,
+                message: userMessage
+            });
+
+            if (res.data.status === 'success') {
+                const data = res.data.data;
+                setLogicChatState({
+                    status: 'existing',
+                    current_stage: data.current_stage,
+                    current_score: data.current_score,
+                    is_completed: data.is_completed,
+                    chat_log: data.chat_log
+                });
+
+                if (data.suggested_replies && data.suggested_replies.length > 0) {
+                    setSuggestedReplies(data.suggested_replies);
+                } else {
+                    setSuggestedReplies([]);
+                }
+
+                if (data.is_completed && pcData) {
+                    setPcData(prev => {
+                        if (!prev) return prev;
+                        return {
+                            ...prev,
+                            current_stage: 'explain_code'
+                        };
+                    });
+                }
+            }
+        } catch (err) {
+            console.error("Chat Error:", err);
+            setLogicChatState(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    chat_log: prev.chat_log.slice(0, -1)
+                };
+            });
+        } finally {
+            setIsSendingChat(false);
+        }
+    };
+
+    // 鍵盤事件處理
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (isComposing) return; // 關鍵修正：IME 輸入中直接返回，不觸發 Enter
+
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendChat();
+        }
+    };
+
+    // --- 舊版提交邏輯 ---
     const handleAnswerSubmit = async (stage: 'logic' | 'error_code' | 'explain_code', questionId: string, optionId: number) => {
         if (!pcData || !selectedProblemId) return;
         if (submittingIds.has(questionId)) return;
@@ -199,7 +350,6 @@ const PreCoding: React.FC = () => {
 
             const { is_correct, feedback, explanation, next_stage, stage_completed } = res.data;
 
-            // 1. 更新 React State
             setPcData(prev => {
                 if (!prev) return null;
                 const currentResponses = [...prev.student_status[stage]];
@@ -228,7 +378,6 @@ const PreCoding: React.FC = () => {
                 };
             });
 
-            // 2. 更新並持久化 Feedback
             setFeedbackMap(prev => {
                 const newMap = {
                     ...prev,
@@ -238,7 +387,6 @@ const PreCoding: React.FC = () => {
                 return newMap;
             });
 
-            // 3. 若階段完成，重新抓取 (取得最新的 Template 等)
             if (stage_completed && next_stage === 'completed') {
                 setTimeout(async () => {
                     const refreshRes = await axios.get(`${API_BASE_URL}/debugging/precoding/${selectedProblemId}`, {
@@ -269,7 +417,9 @@ const PreCoding: React.FC = () => {
         return "";
     };
 
-    // --- 單一題目卡片元件 ---
+    // --- 原本的 ChatInterface 元件 (已移除 wrapper，直接在下方渲染) ---
+
+    // --- 舊版題目卡片元件 ---
     const QuestionCard = ({
         question,
         stage
@@ -295,7 +445,6 @@ const PreCoding: React.FC = () => {
                     ? 'bg-white border-red-200 shadow-sm'
                     : 'bg-white border-gray-200 shadow-sm hover:shadow-md'
                 }`}>
-                {/* 標題與狀態 */}
                 <div className="flex items-center justify-between mb-3">
                     <h3 className={`font-bold text-md ${isCorrect ? 'text-green-800' : 'text-gray-800'}`}>
                         {question.id}
@@ -304,7 +453,6 @@ const PreCoding: React.FC = () => {
                     {!isCorrect && selectedId !== undefined && <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold">Try Again ⚠️</span>}
                 </div>
 
-                {/* 題目內容 */}
                 <div className="mb-4">
                     <div className="text-gray-800 font-medium whitespace-pre-wrap mb-2">
                         {safeText(question.question.text)}
@@ -316,7 +464,6 @@ const PreCoding: React.FC = () => {
                     )}
                 </div>
 
-                {/* 選項列表 */}
                 <div className="space-y-2">
                     {question.options.map((opt) => {
                         const isSelected = selectedId === opt.id;
@@ -350,7 +497,6 @@ const PreCoding: React.FC = () => {
                     })}
                 </div>
 
-                {/* 回饋區域 */}
                 {showFeedback && (
                     <div className={`mt-4 p-3 rounded-lg border flex gap-3 animate-fade-in ${isCorrect ? 'bg-green-100 border-green-200 text-green-900' : 'bg-red-50 border-red-200 text-red-900'
                         }`}>
@@ -371,7 +517,7 @@ const PreCoding: React.FC = () => {
         );
     };
 
-    // --- 共用的鎖定訊息元件 ---
+    // --- 鎖定區塊元件 ---
     const LockedSection = () => (
         <div className="border border-gray-200 rounded-xl p-8 bg-gray-50 opacity-70 text-center border-dashed mb-6 select-none flex flex-col items-center justify-center h-32">
             <div className="text-3xl mb-3">🔒</div>
@@ -379,23 +525,18 @@ const PreCoding: React.FC = () => {
         </div>
     );
 
-    // --- 主介面渲染 (修正版排版) ---
+    // --- 主介面渲染 ---
     return (
-        // 使用 Flex Row 確保左右不重疊
         <div className="flex h-full w-full bg-white">
 
-            {/* Sidebar (直接使用元件，透過 isOpen 控制內部顯示) */}
             <Sidebar
                 isOpen={isSidebarOpen}
                 selectedProblemId={selectedProblemId}
                 onSelectProblem={setSelectedProblemId}
             />
 
-            {/* Main Content */}
-            {/* flex-1 讓內容佔滿剩餘空間，min-w-0 防止內容撐開 */}
             <div className="flex-1 flex flex-col h-full min-w-0 bg-white">
 
-                {/* Header (樣式同步 StudentCodingHelp) */}
                 <div className="h-12 border-b border-gray-200 flex items-center px-4 bg-white shrink-0 justify-between">
                     <div className="flex items-center">
                         <button
@@ -408,7 +549,6 @@ const PreCoding: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Resizable Split Panes */}
                 <div ref={containerRef} className="flex flex-1 overflow-hidden relative">
 
                     {/* Left Pane (題目資訊) */}
@@ -468,26 +608,44 @@ const PreCoding: React.FC = () => {
                         <div className="w-1 h-8 bg-gray-400 rounded-full"></div>
                     </div>
 
-                    {/* Right Pane: Pre-Coding System */}
+                    {/* Right Pane: Pre-Coding System with Tabs */}
                     <div
                         className="flex flex-col bg-gray-50 h-full overflow-hidden"
                         style={{ width: `${100 - leftWidth}%` }}
                     >
-                        <div className="px-6 py-4 bg-white border-b border-gray-200 shrink-0 shadow-sm">
-                            <h2 className="text-lg font-bold text-gray-800 flex items-center">
-                                <span className="text-blue-600 mr-2">✦ 觀念建構 (Pre-Coding)</span>
-                            </h2>
-                            <p className="text-xs text-gray-500 mt-1">
-                                {pcData ? `進度：${pcData.current_stage === 'completed' ? '已完成' :
-                                    pcData.current_stage === 'error_code' ? '第三階段' :
-                                        pcData.current_stage === 'explain_code' ? '第二階段' :
-                                            '第一階段'
-                                    }` : '載入中...'}
-                            </p>
+                        {/* Tab Header */}
+                        <div className="flex bg-white border-b border-gray-200">
+                            <button
+                                onClick={() => setActiveTab('concept')}
+                                disabled={!selectedProblemId}
+                                className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center gap-2
+                                    ${!selectedProblemId
+                                        ? 'border-transparent text-gray-300 cursor-not-allowed'
+                                        : activeTab === 'concept'
+                                            ? 'border-blue-500 text-blue-600'
+                                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                                    }`}
+                            >
+                                <span>觀念建構</span>
+                                {isLogicCompleted && <span className="flex items-center justify-center w-4 h-4 rounded-full bg-green-500 text-white text-[10px]">✓</span>}
+                            </button>
+
+                            <button
+                                onClick={() => isLogicCompleted && setActiveTab('implementation')}
+                                disabled={!selectedProblemId || !isLogicCompleted}
+                                className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center gap-2
+                                    ${!selectedProblemId || !isLogicCompleted
+                                        ? 'border-transparent text-gray-300 cursor-not-allowed'
+                                        : activeTab === 'implementation'
+                                            ? 'border-green-500 text-green-700'
+                                            : 'border-transparent text-gray-500 hover:text-gray-700'
+                                    }`}
+                            >
+                                <span>實作引導</span>
+                            </button>
                         </div>
 
-                        <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
-                            {/* Render Logic */}
+                        <div className={`flex-1 overflow-y-auto scroll-smooth ${activeTab === 'concept' ? '' : 'p-6'}`}>
                             {!selectedProblemId ? (
                                 <div className="flex flex-col items-center justify-center h-full text-gray-400">
                                     <p>請先選擇題目...</p>
@@ -502,94 +660,168 @@ const PreCoding: React.FC = () => {
                                     <div className="text-3xl opacity-50">📂</div>
                                     <p className="font-medium text-red-500">{error}</p>
                                 </div>
-                            ) : pcData ? (
-                                <div className="max-w-3xl mx-auto pb-10">
-
-                                    {/* 1. 邏輯思考區塊 (永遠開啟) */}
-                                    <div className="mb-8">
-                                        <h2 className="text-lg font-bold text-blue-700 mb-4 flex items-center">
-                                            <span className="bg-blue-100 text-blue-600 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">1</span>
-                                            邏輯思考 (Logic)
-                                        </h2>
-                                        {/* 邏輯題總是顯示 */}
-                                        {pcData.question_data.logic_question.map(q => (
-                                            <QuestionCard key={q.id} question={q} stage="logic" />
-                                        ))}
-                                    </div>
-
-                                    {/* 2. 程式碼解釋區塊 (新) */}
-                                    <div className="mb-8">
-                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${pcData.current_stage === 'logic' ? 'text-gray-400' : 'text-orange-700'}`}>
-                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${pcData.current_stage === 'logic' ? 'bg-gray-200' : 'bg-orange-100 text-orange-600'}`}>2</span>
-                                            程式碼解釋 (Code Explanation)
-                                        </h2>
-
-                                        {/* 鎖定邏輯：如果還在 logic 階段，顯示鎖頭 */}
-                                        {pcData.current_stage === 'logic' ? (
-                                            <LockedSection />
-                                        ) : (
-                                            pcData.question_data.explain_code_question.map(q => (
-                                                <QuestionCard key={q.id} question={q} stage="explain_code" />
-                                            ))
-                                        )}
-                                    </div>
-                                    {/* 3. 程式除錯區塊 */}
-                                    <div className="mb-8">
-                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${['logic', 'explain_code'].includes(pcData.current_stage) ? 'text-gray-400' : 'text-purple-700'}`}>
-                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${['logic', 'explain_code'].includes(pcData.current_stage) ? 'bg-gray-200' : 'bg-purple-100 text-purple-600'}`}>3</span>
-                                            程式除錯 (Debugging)
-                                        </h2>
-
-                                        {/* 鎖定邏輯：如果還在 logic 或 explain_code 階段，顯示鎖頭 */}
-                                        {['logic', 'explain_code'].includes(pcData.current_stage) ? (
-                                            <LockedSection />
-                                        ) : (
-                                            pcData.question_data.error_code_question.map(q => (
-                                                <QuestionCard key={q.id} question={q} stage="error_code" />
-                                            ))
-                                        )}
-                                    </div>
-
-
-                                    {/* 4. 程式碼架構區塊 (Template) */}
-                                    <div className="mb-8">
-                                        <h2 className={`text-lg font-bold mb-4 flex items-center ${!pcData.is_completed ? 'text-gray-400' : 'text-gray-700'}`}>
-                                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${!pcData.is_completed ? 'bg-gray-200' : 'bg-gray-200 text-gray-600'}`}>4</span>
-                                            程式碼架構 (Template)
-                                        </h2>
-
-                                        {/* 鎖定邏輯：如果未完成，顯示鎖頭 */}
-                                        {!pcData.is_completed ? (
-                                            <LockedSection />
-                                        ) : (
-                                            <div className="animate-fade-in-up">
-                                                <div className="border border-gray-300 rounded-xl overflow-hidden shadow-sm">
-                                                    <div className="bg-gray-100 px-4 py-2 border-b border-gray-300 flex justify-between items-center">
-                                                        <span className="font-bold text-gray-700 text-sm">📄 Template Code</span>
-                                                        {/* <button
-                                                            onClick={() => navigator.clipboard.writeText(getTemplateContent(pcData.template))}
-                                                            className="text-xs text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-                                                        >
-                                                            複製
-                                                        </button> */}
+                            ) : (
+                                <>
+                                    {/* Tab 1: 觀念建構 - 滿版對話 */}
+                                    {activeTab === 'concept' && (
+                                        <div className="flex flex-col h-full">
+                                            {logicChatState ? (
+                                                <div className="flex flex-col h-full bg-white overflow-hidden">
+                                                    {/* Chat Messages */}
+                                                    <div
+                                                        ref={chatContainerRef}
+                                                        className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
+                                                    >
+                                                        {logicChatState.chat_log.map((msg, idx) => (
+                                                            <div
+                                                                key={idx}
+                                                                className={`flex ${msg.role === 'student' ? 'justify-end' : 'justify-start'}`}
+                                                            >
+                                                                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${msg.role === 'student'
+                                                                    ? 'bg-blue-500 text-white rounded-br-md'
+                                                                    : 'bg-white border border-gray-200 text-gray-800 rounded-bl-md shadow-sm'
+                                                                    }`}>
+                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                        {isSendingChat && (
+                                                            <div className="flex justify-start">
+                                                                <div className="bg-white border border-gray-200 rounded-2xl px-4 py-2.5 rounded-bl-md shadow-sm">
+                                                                    <div className="flex gap-1">
+                                                                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                                                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                                                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
-                                                    {/* 使用 whitespace-pre 搭配 overflow-auto 實現橫向捲軸 */}
-                                                    <pre className="bg-[#1e1e1e] text-gray-100 p-4 text-sm font-mono overflow-auto max-h-[500px] leading-relaxed whitespace-pre">
-                                                        {getTemplateContent(pcData.template)}
-                                                    </pre>
-                                                </div>
 
-                                                {/* 完成訊息移至最底部 */}
-                                                <div className="mt-6 flex justify-center items-center p-4 bg-green-50 border border-green-200 rounded-xl text-green-700">
-                                                    <span className="text-xl mr-2">🎉</span>
-                                                    <span className="font-bold">觀念建構已完成！您可以開始撰寫程式了。</span>
+                                                    {/* Suggested Replies + Input Area */}
+                                                    {!logicChatState.is_completed ? (
+                                                        <div className="border-t border-gray-200 bg-white">
+                                                            {/* Suggested Replies 提示選項 */}
+                                                            {suggestedReplies.length > 0 && (
+                                                                <div className="px-4 pt-3 flex flex-wrap gap-2">
+                                                                    {suggestedReplies.map((reply, idx) => (
+                                                                        <button
+                                                                            key={idx}
+                                                                            // 修改 1: 點擊後僅填入輸入框，不直接送出
+                                                                            onClick={() => setChatInput(reply)}
+                                                                            disabled={isSendingChat}
+                                                                            className="px-3 py-1.5 text-sm bg-blue-50 text-blue-700 border border-blue-200 rounded-full hover:bg-blue-100 hover:border-blue-300 transition-colors disabled:opacity-50"
+                                                                        >
+                                                                            {reply}
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            {/* Input Area */}
+                                                            <div className="p-4 flex gap-2">
+                                                                <textarea
+                                                                    value={chatInput}
+                                                                    onChange={(e) => setChatInput(e.target.value)}
+                                                                    onKeyDown={handleKeyDown}
+                                                                    onCompositionStart={() => setIsComposing(true)}
+                                                                    onCompositionEnd={(e) => {
+                                                                        setIsComposing(false);
+                                                                    }}
+                                                                    placeholder="輸入您的回答..."
+                                                                    className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all"
+                                                                    rows={2}
+                                                                    disabled={isSendingChat}
+                                                                />
+                                                                <button
+                                                                    onClick={() => handleSendChat()}
+                                                                    disabled={!chatInput.trim() || isSendingChat}
+                                                                    // 修改 2: 
+                                                                    // - 移除 'self-end' (讓高度跟隨 flex 容器撐開，即與 textarea 等高)
+                                                                    // - 加入 'h-auto flex items-center justify-center' (確保高度自動適應且文字置中)
+                                                                    className="px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium text-sm h-auto flex items-center justify-center"
+                                                                >
+                                                                    Send
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="p-4 border-t border-gray-200 bg-green-50">
+                                                            <div className="flex items-center justify-center gap-2 text-green-700">
+                                                                <span className="font-bold">觀念建構已完成！請切換至「實作引導」分頁。</span>
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
+                                            ) : (
+                                                <div className="flex-1 flex items-center justify-center">
+                                                    <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200 text-yellow-700">
+                                                        <p>正在載入對話介面...</p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Tab 2: 實作引導 */}
+                                    {activeTab === 'implementation' && pcData && (
+                                        <div className="max-w-3xl mx-auto pb-10">
+                                            {/* 程式碼解釋區塊 */}
+                                            <div className="mb-8">
+                                                <h2 className="text-lg font-bold text-gray-700 mb-4 flex items-center">
+                                                    <span className="bg-gray-200 text-gray-600 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">1</span>
+                                                    程式碼解釋 (Code Explanation)
+                                                </h2>
+                                                {pcData.question_data.explain_code_question.map(q => (
+                                                    <QuestionCard key={q.id} question={q} stage="explain_code" />
+                                                ))}
                                             </div>
-                                        )}
-                                    </div>
 
-                                </div>
-                            ) : null}
+                                            {/* 程式除錯區塊 */}
+                                            <div className="mb-8">
+                                                <h2 className={`text-lg font-bold mb-4 flex items-center ${['logic', 'explain_code'].includes(pcData.current_stage) ? 'text-gray-400' : 'text-gray-700'}`}>
+                                                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${['logic', 'explain_code'].includes(pcData.current_stage) ? 'bg-gray-200' : 'bg-gray-200 text-gray-600'}`}>2</span>
+                                                    程式除錯 (Debugging)
+                                                </h2>
+
+                                                {['logic', 'explain_code'].includes(pcData.current_stage) ? (
+                                                    <LockedSection />
+                                                ) : (
+                                                    pcData.question_data.error_code_question.map(q => (
+                                                        <QuestionCard key={q.id} question={q} stage="error_code" />
+                                                    ))
+                                                )}
+                                            </div>
+
+                                            {/* 程式碼架構區塊 (Template) */}
+                                            <div className="mb-8">
+                                                <h2 className={`text-lg font-bold mb-4 flex items-center ${!pcData.is_completed ? 'text-gray-400' : 'text-gray-700'}`}>
+                                                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2 ${!pcData.is_completed ? 'bg-gray-200' : 'bg-gray-200 text-gray-600'}`}>3</span>
+                                                    程式碼架構 (Template)
+                                                </h2>
+
+                                                {!pcData.is_completed ? (
+                                                    <LockedSection />
+                                                ) : (
+                                                    <div className="animate-fade-in-up">
+                                                        <div className="border border-gray-300 rounded-xl overflow-hidden shadow-sm">
+                                                            <div className="bg-gray-100 px-4 py-2 border-b border-gray-300 flex justify-between items-center">
+                                                                <span className="font-bold text-gray-700 text-sm">📄 Template Code</span>
+                                                            </div>
+                                                            <pre className="bg-[#1e1e1e] text-gray-100 p-4 text-sm font-mono overflow-auto max-h-[500px] leading-relaxed whitespace-pre">
+                                                                {getTemplateContent(pcData.template)}
+                                                            </pre>
+                                                        </div>
+
+                                                        <div className="mt-6 flex justify-center items-center p-4 bg-green-50 border border-green-200 rounded-xl text-green-700">
+                                                            <span className="font-bold">觀念建構已完成！可以開始撰寫程式了。</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

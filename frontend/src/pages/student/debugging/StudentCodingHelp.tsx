@@ -3,7 +3,7 @@ import axios from 'axios';
 import Sidebar from '../../../components/student/debugging/Sidebar';
 import { useUser } from '../../../contexts/UserContext';
 
-const API_BASE_URL = "http://127.0.0.1:5000";
+const API_BASE_URL = "http://127.0.0.1:8000";
 
 // --- Interfaces ---
 interface ProblemDetail {
@@ -74,6 +74,7 @@ const StudentCodingHelp: React.FC = () => {
     const [studentCode, setStudentCode] = useState<string>("");
     const [result, setResult] = useState<string | null>(null);
     const [isAccepted, setIsAccepted] = useState(false);
+    const [hasSubmission, setHasSubmission] = useState(false);
     const [loading, setLoading] = useState(false);
 
     const [activeRightTab, setActiveRightTab] = useState<'editor' | 'chatbot' | 'practice'>('editor');
@@ -142,6 +143,7 @@ const StudentCodingHelp: React.FC = () => {
             setLoading(true);
             setResult(null);
             setIsAccepted(false);
+            setHasSubmission(false);  // 重置提交狀態
 
             // 重置 Practice State
             setPracticeStatus('locked');
@@ -165,6 +167,10 @@ const StudentCodingHelp: React.FC = () => {
                     setStudentCode(data.code || "");
                     setResult(data.result);
                     setIsAccepted(data.is_accepted);
+                    // 若有既存結果，表示曾經提交過
+                    if (data.result) {
+                        setHasSubmission(true);
+                    }
 
                     const pInfo = data.practice;
                     if (data.is_accepted) {
@@ -247,6 +253,8 @@ const StudentCodingHelp: React.FC = () => {
     const handleTabChange = async (tab: 'editor' | 'chatbot' | 'practice') => {
         if (!selectedProblemId) return;
         if (tab === 'practice' && practiceStatus === 'locked') return;
+        // 鎖定程式修正分頁：若無提交紀錄則不允許切換
+        if (tab === 'chatbot' && !hasSubmission) return;
 
         setActiveRightTab(tab);
 
@@ -297,6 +305,7 @@ const StudentCodingHelp: React.FC = () => {
             const { verdict, practice_question } = response.data;
 
             setResult(verdict);
+            setHasSubmission(true); // 標記已提交過
 
             const isAC = verdict === "Accepted" || (typeof verdict === 'string' && verdict.includes("AC"));
 
@@ -483,11 +492,15 @@ const StudentCodingHelp: React.FC = () => {
 
                             <button
                                 onClick={() => handleTabChange('chatbot')}
-                                disabled={!isProblemSelected}
-                                className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors 
-                                    ${!isProblemSelected ? 'border-transparent text-gray-300 cursor-not-allowed' : activeRightTab === 'chatbot' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                                disabled={!isProblemSelected || !hasSubmission}
+                                className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center gap-2
+                                    ${!isProblemSelected || !hasSubmission
+                                        ? 'border-transparent text-gray-300 cursor-not-allowed'
+                                        : activeRightTab === 'chatbot'
+                                            ? 'border-blue-500 text-blue-600'
+                                            : 'border-transparent text-gray-500 hover:text-gray-700'}`}
                             >
-                                程式修正
+                                <span>程式修正</span>
                             </button>
 
                             {/* [修改 4] 練習題 Tab 按鈕邏輯更新 */}

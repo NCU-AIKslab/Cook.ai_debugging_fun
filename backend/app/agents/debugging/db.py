@@ -84,6 +84,39 @@ precoding_student_answers_table = Table(
 )
 
 # ==========================================
+# 2.5 Pre-Coding Logic Chatbot Tables (觀念建構 - 對話式)
+# ==========================================
+
+# 管理學生目前的階段與分數
+precoding_logic_status_table = Table(
+    "precoding_logic_status",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("student_id", String(50), nullable=False),
+    Column("problem_id", String(50), nullable=False),
+    Column("current_stage", String(20), default="UNDERSTANDING"),  # UNDERSTANDING, DECOMPOSITION, COMPLETED
+    Column("current_score", Integer, default=1),  # 1-4 分
+    Column("is_completed", Boolean, default=False),
+    Column("created_at", DateTime, server_default=func.now()),
+    Column("updated_at", DateTime, server_default=func.now(), onupdate=func.now()),
+    schema="debugging",
+    extend_existing=True,
+)
+
+# 對話紀錄表 (將整串對話塞進 chat_log JSONB 欄位)
+precoding_logic_logs_table = Table(
+    "precoding_logic_logs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("student_id", String(50), nullable=False),
+    Column("problem_id", String(50), nullable=False),
+    Column("chat_log", JSONB, default=[]),  # [{"role":..., "content":..., "stage":..., "score":..., "timestamp":...}]
+    Column("updated_at", DateTime, server_default=func.now(), onupdate=func.now()),
+    schema="debugging",
+    extend_existing=True,
+)
+
+# ==========================================
 # 3. CodingHelp Tables (AI 診斷與對話)
 # ==========================================
 
