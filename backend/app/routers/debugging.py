@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends, BackgroundTa
 from typing import Optional, List, Dict, Any
 import json, re
 import logging
-from sqlalchemy import select, desc, insert, text
+from sqlalchemy import select, desc, insert, update, text
 from pydantic import BaseModel
 
 # --- OJ & Core Imports ---
@@ -30,10 +30,14 @@ from backend.app.agents.debugging.pre_coding.manager import PreCodingManager
 # --- Graph Import ---
 from backend.app.agents.debugging.graph import app_graph
 
+# --- Help Chat Import (僅用於 /help/chat 端點) ---
+from backend.app.agents.debugging.coding_help.help_chat import process_chat
+
 # LangChain Imports (For Chat)
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 import os
+from datetime import datetime
 
 router = APIRouter(prefix="/debugging", tags=["Online Judge & Problems"])
 logger = logging.getLogger(__name__)
@@ -88,51 +92,81 @@ def clean_markdown_filter(text: str) -> str:
     return text.strip()
 
 # ==========================================
-# Helper: Background Task for Error Diagnosis
+# Helper: Background Task using LangGraph
 # ==========================================
 
-async def run_background_diagnosis_task(initial_state: Dict, submission_num: int):
+async def run_background_graph_task(initial_state: Dict, submission_num: int):
     """
-    背景任務：僅針對「錯誤提交」執行 AI 診斷、RAG 檢索與鷹架生成。
+    背景任務：使用 LangGraph app_graph 執行完整的診斷/練習題生成流程。
+    根據 is_correct 決定走哪條路：
+    - is_correct=False: 執行診斷 -> 路由 -> 檢索(可選) -> 鷹架回覆
+    - is_correct=True: 生成練習題
     """
     student_id = initial_state["student_id"]
     problem_id = initial_state["problem_id"]
-    logger.info(f"Starting background DIAGNOSIS for {student_id} on {problem_id} (Sub#{submission_num})")
+    is_correct = initial_state.get("is_correct", False)
+    
+    logger.info(f"Starting background GRAPH task for {student_id} on {problem_id} (Sub#{submission_num}, is_correct={is_correct})")
 
     try:
-        # 執行 Graph
+        # 執行 LangGraph
         final_state = await app_graph.ainvoke(initial_state)
         
-        # 取得結果
-        report = final_state.get("evidence_report", {})
-        scaffold_response = final_state.get("initial_response", "")
-        zpd = final_state.get("zpd_level", 1)
-
-        # 1. 儲存診斷報告 (Evidence Report)
-        with engine.begin() as conn:
-            conn.execute(insert(evidence_report_table).values(
-                student_id=student_id,
-                problem_id=problem_id,
-                num=submission_num,
-                evidence_report=report,
-                code={"content": initial_state["current_code"]}
-            ))
-        
-        # 2. 儲存自動生成的對話鷹架 (Scaffold)
-        if scaffold_response:
+        if is_correct:
+            # --- AC 路徑：儲存練習題 ---
+            practice_q = final_state.get("practice_question", [])
+            
+            if practice_q:
+                with engine.begin() as conn:
+                    conn.execute(insert(practice_table).values(
+                        student_id=student_id,
+                        problem_id=problem_id,
+                        code_question=practice_q,
+                        answer_is_correct=False
+                    ))
+                logger.info(f"Background Task - Practice questions saved for {student_id}")
+            else:
+                logger.warning(f"No practice questions generated for {student_id}")
+        else:
+            # --- Error 路徑：儲存診斷報告與鷹架回覆 ---
+            report = final_state.get("evidence_report", {})
+            scaffold_response = final_state.get("initial_response", "")
+            zpd = final_state.get("zpd_level", 1)
+            
+            # 1. 儲存診斷報告 (Evidence Report) - 包含錯誤程式碼
             with engine.begin() as conn:
-                conn.execute(insert(dialogue_table).values(
+                conn.execute(insert(evidence_report_table).values(
                     student_id=student_id,
                     problem_id=problem_id,
-                    num=submission_num, 
-                    student_question=None, 
-                    agent_reply={"content": clean_markdown_filter(scaffold_response), "type": "scaffold"},
-                    zpd_level=zpd
+                    num=submission_num,
+                    evidence_report=report,
+                    code={"content": initial_state["current_code"]}
                 ))
-            logger.info(f"Background Task - Diagnosis & Scaffold saved for {student_id}")
+            
+            # 2. 儲存對話紀錄 (使用新的 chat_log 格式)
+            if scaffold_response:
+                timestamp = datetime.now().isoformat()
+                initial_chat_log = [
+                    {
+                        "role": "agent",
+                        "content": clean_markdown_filter(scaffold_response),
+                        "zpd": zpd,
+                        "timestamp": timestamp,
+                        "type": "scaffold"
+                    }
+                ]
+                
+                with engine.begin() as conn:
+                    conn.execute(insert(dialogue_table).values(
+                        student_id=student_id,
+                        problem_id=problem_id,
+                        num=submission_num,
+                        chat_log=initial_chat_log
+                    ))
+                logger.info(f"Background Task - Diagnosis & Scaffold saved for {student_id}")
 
     except Exception as e:
-        logger.error(f"Background Diagnosis Failed: {e}")
+        logger.error(f"Background Graph Task Failed: {e}")
 
 # ==========================================
 # Online Judge API Endpoints
@@ -239,43 +273,17 @@ async def submit_code(
     }
 
     # ============================================================
-    # Branching Logic: Sync for AC, Async for Error
+    # 統一使用 LangGraph 處理 (AC 和 Error 皆走 graph)
     # ============================================================
     
-    practice_question_data = []
-
-    if is_correct:
-        # --- Case A: Accepted (同步等待) ---
-        # 因為前端要立刻拿到練習題，所以這裡使用 await 等待 Graph 執行完畢
-        try:
-            logger.info(f"Verdict is AC. Generating practice questions synchronously...")
-            final_state = await app_graph.ainvoke(initial_state)
-            
-            practice_q = final_state.get("practice_question", [])
-            
-            if practice_q:
-                # 寫入 Practice Table
-                with engine.begin() as conn:
-                    conn.execute(insert(practice_table).values(
-                        student_id=payload.student_id,
-                        problem_id=payload.problem_id,
-                        code_question=practice_q,
-                        answer_is_correct=False
-                    ))
-                practice_question_data = practice_q
-                logger.info("Practice questions generated and saved.")
-        except Exception as e:
-            logger.error(f"Sync Practice Generation Failed: {e}")
-            # 即使生成練習題失敗，仍應回傳 AC 結果，不拋錯
-    
-    else:
-        # --- Case B: Error (背景執行) ---
-        # 前端不需要立刻拿到診斷結果，放入 BackgroundTasks
-        background_tasks.add_task(
-            run_background_diagnosis_task,
-            initial_state=initial_state,
-            submission_num=this_submission_num
-        )
+    # 無論 AC 或 Error，都使用 app_graph 處理
+    # graph 會根據 is_correct 決定走哪條路
+    logger.info(f"Adding background GRAPH task. is_correct={is_correct}")
+    background_tasks.add_task(
+        run_background_graph_task,
+        initial_state=initial_state,
+        submission_num=this_submission_num
+    )
 
     # ============================================================
     # Response
@@ -287,12 +295,10 @@ async def submit_code(
         "submission_num": this_submission_num,
     }
 
-    # 如果是 AC 且有生成練習題，放入回傳物件
-    if is_correct and practice_question_data:
-        response["practice_question"] = practice_question_data
-    
-    # 如果是 Error，給個提示訊息
-    if not is_correct:
+    # 訊息
+    if is_correct:
+        response["message"] = "Accepted! Practice questions are being generated."
+    else:
         response["message"] = "Diagnosis is processing in background."
 
     return response
@@ -484,6 +490,7 @@ def submit_practice_answer_endpoint(payload: PracticeSubmitListRequest):
 
 @router.post("/help/init")
 async def init_coding_help(payload: InitHelpRequest):
+    """初始化 CodingHelp，讀取對話紀錄 (支援 chat_log 新格式及舊格式)"""
     try:
         latest_num = get_submission_count(payload.student_id, payload.problem_id)
         if latest_num == 0:
@@ -498,11 +505,27 @@ async def init_coding_help(payload: InitHelpRequest):
             existing_dialogue = conn.execute(check_stmt).fetchone()
             
             if existing_dialogue:
+                mapping = existing_dialogue._mapping
+                chat_log = mapping.get("chat_log") or []
+                
+                # 從 chat_log 讀取最後一則 agent 訊息作為初始回覆
+                initial_reply = ""
+                zpd_level = 1
+                
+                if chat_log:
+                    # 尋找最後一則 agent 回覆
+                    for msg in reversed(chat_log):
+                        if msg.get("role") == "agent":
+                            initial_reply = msg.get("content", "")
+                            zpd_level = msg.get("zpd", 1)
+                            break
+                
                 return {
                     "status": "resumed",
-                    "reply": existing_dialogue._mapping["agent_reply"]["content"],
-                    "zpd_level": existing_dialogue._mapping["zpd_level"],
-                    "num": latest_num
+                    "reply": initial_reply,
+                    "zpd_level": zpd_level,
+                    "num": latest_num,
+                    "chat_log": chat_log
                 }
             
             return {
@@ -516,11 +539,15 @@ async def init_coding_help(payload: InitHelpRequest):
 
 @router.post("/help/chat")
 async def chat_with_agent(payload: ChatRequest):
+    """
+    處理聊天請求
+    使用新的 help_chat 模組，包含 Input Guard 和 chat_log 格式
+    """
     try:
         latest_num = get_submission_count(payload.student_id, payload.problem_id)
         
         with engine.connect() as conn:
-            # evidence report
+            # 1. 取得 evidence report
             stmt_rep = select(evidence_report_table).where(
                 evidence_report_table.c.student_id == payload.student_id,
                 evidence_report_table.c.problem_id == payload.problem_id,
@@ -532,71 +559,83 @@ async def chat_with_agent(payload: ChatRequest):
             if report_row:
                 context_report = report_row._mapping["evidence_report"]
             
-            # zpd level
-            stmt_zpd = select(dialogue_table.c.zpd_level).where(
-                 dialogue_table.c.student_id == payload.student_id,
-                 dialogue_table.c.problem_id == payload.problem_id,
-                 dialogue_table.c.num == latest_num
+            # 2. 取得現有對話紀錄
+            stmt_dial = select(dialogue_table).where(
+                dialogue_table.c.student_id == payload.student_id,
+                dialogue_table.c.problem_id == payload.problem_id,
+                dialogue_table.c.num == latest_num
             ).limit(1)
-            zpd_val = conn.execute(stmt_zpd).scalar() or 1
-
-            # dialogue history (前一個回覆 & 學生現在提問)
-            stmt_dial = (
-                select(dialogue_table)
-                .where(
-                    dialogue_table.c.student_id == payload.student_id,
-                    dialogue_table.c.problem_id == payload.problem_id
-                )
-                .order_by(dialogue_table.c.id.desc())  
-                .limit(2)                             
-            )
-
-            history_rows = conn.execute(stmt_dial).fetchall() 
-
-        problem_info_raw = get_problem_by_id(payload.problem_id)
-        problem_context = f"Problem: {problem_info_raw.get('title')}\nDesc: {problem_info_raw.get('description')}"
-        zpd, strategy = (1, "引導學生思考修正邏輯，可提供部分範例。") if zpd_val == 1 else (2, "給予具體提示。") if zpd_val == 2 else (3, "僅給予方向性提示。")
-
-        messages = [
-            SystemMessage(content=f"""
-            你是一位程式設計輔導老師，請根據前一個回覆和學生現在提問，提供適當的引導。
-
-            題目資訊：{problem_context}**注意**:輸出格式需參考sampls
-            學生錯誤程式碼診斷結果：{json.dumps(context_report)}
+            dialogue_row = conn.execute(stmt_dial).fetchone()
             
-            【教學策略 (ZPD 等級 {zpd})】: {strategy}
-
-            請遵守：
-            1. 使用繁體中文，**簡單明瞭**，條列式回覆，不帶任何情緒。
-            2. 嚴禁使用 Markdown 語法。
-            3. 依照策略強度提供引導，不要直接給出完整正確答案。
-            4. **不可回答與題目無相關問題**
-
-            """)
-        ]
-
-        for row in history_rows:
-            d = row._mapping
-            if d["student_question"]:
-                messages.append(HumanMessage(content=d["student_question"]["content"]))
-            if d["agent_reply"]:
-                messages.append(AIMessage(content=d["agent_reply"]["content"]))
+            existing_chat_log = []
+            zpd_val = 1
+            dialogue_id = None
+            
+            if dialogue_row:
+                mapping = dialogue_row._mapping
+                existing_chat_log = mapping.get("chat_log") or []
+                dialogue_id = mapping.get("id")
+                
+                # 從 chat_log 取得 zpd_level
+                if existing_chat_log:
+                    for msg in existing_chat_log:
+                        if msg.get("zpd"):
+                            zpd_val = msg.get("zpd", 1)
+                            break
         
-        messages.append(HumanMessage(content=payload.message))
+        # 3. 取得題目資訊
+        problem_info_raw = get_problem_by_id(payload.problem_id)
+        problem_info = {
+            "title": problem_info_raw.get("title", ""),
+            "description": problem_info_raw.get("description", ""),
+            "input_description": problem_info_raw.get("input_description", ""),
+            "output_description": problem_info_raw.get("output_description", "")
+        }
+        
+        # 4. 使用 help_chat 模組處理對話
+        chat_result = await process_chat(
+            message=payload.message,
+            zpd_level=zpd_val,
+            evidence_report=context_report,
+            problem_info=problem_info,
+            chat_log=existing_chat_log
+        )
+        
+        # 5. 檢查輸入驗證結果
+        if not chat_result["is_valid"]:
+            return {
+                "reply": chat_result["response"],
+                "is_valid": False
+            }
+        
+        # 6. 更新對話紀錄 (使用 UPDATE 或 INSERT)
+        updated_chat_log = chat_result["updated_chat_log"]
+        
+        if dialogue_id:
+            # 更新現有記錄
+            with engine.begin() as conn:
+                conn.execute(
+                    update(dialogue_table).where(
+                        dialogue_table.c.id == dialogue_id
+                    ).values(
+                        chat_log=updated_chat_log
+                    )
+                )
+        else:
+            # 新增記錄 (如果不存在)
+            with engine.begin() as conn:
+                conn.execute(insert(dialogue_table).values(
+                    student_id=payload.student_id,
+                    problem_id=payload.problem_id,
+                    num=latest_num,
+                    chat_log=updated_chat_log
+                ))
 
-        response = await chat_llm.ainvoke(messages)
-        clean_reply = clean_markdown_filter(response.content)
-        with engine.begin() as conn:
-            conn.execute(insert(dialogue_table).values(
-                student_id=payload.student_id,
-                problem_id=payload.problem_id,
-                num=latest_num, 
-                student_question={"content": payload.message},
-                agent_reply={"content": clean_reply, "type": "chat"},
-                zpd_level=zpd_val
-            ))
-
-        return {"reply": clean_reply}
+        return {
+            "reply": chat_result["response"],
+            "is_valid": True,
+            "chat_log": updated_chat_log
+        }
 
     except Exception as e:
         logger.error(f"Chat Error: {e}")
@@ -604,10 +643,11 @@ async def chat_with_agent(payload: ChatRequest):
 
 @router.get("/help/history/{student_id}/{problem_id}")
 def get_history_endpoint(student_id: str, problem_id: str):
+    """取得對話歷史 (僅使用 chat_log 格式)"""
     try:
         latest_num = get_submission_count(student_id, problem_id)
         if latest_num == 0:
-            return []
+            return {"chat_log": []}
 
         with engine.connect() as conn:
             stmt = select(dialogue_table).where(
@@ -616,17 +656,17 @@ def get_history_endpoint(student_id: str, problem_id: str):
                 dialogue_table.c.num == latest_num 
             ).order_by(dialogue_table.c.id.asc())
             rows = conn.execute(stmt).fetchall()
-            
-        return [
-            {
-                "id": r._mapping["id"],
-                "num": r._mapping["num"],
-                "student": r._mapping["student_question"],
-                "agent": r._mapping["agent_reply"],
-                "zpd": r._mapping["zpd_level"],
-                "time": r._mapping["submitted_at"]
-            }
-            for r in rows
-        ]
+        
+        # 回傳 chat_log 格式
+        all_chat_log = []
+        
+        for r in rows:
+            mapping = r._mapping
+            chat_log = mapping.get("chat_log") or []
+            if chat_log:
+                all_chat_log.extend(chat_log)
+        
+        return {"chat_log": all_chat_log}
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

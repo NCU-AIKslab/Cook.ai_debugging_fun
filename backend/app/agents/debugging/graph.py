@@ -1,7 +1,11 @@
+"""
+LangGraph Workflow for Debugging Agents
+此模組定義了錯誤診斷與引導的 LangGraph 工作流程。
+Agent 邏輯已拆分至 coding_help 資料夾中的獨立模組。
+"""
 import os
 import json
 import logging
-import re
 from typing import TypedDict, List, Dict, Any, Literal
 from datetime import datetime
 
@@ -11,41 +15,28 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END, START
 
-# Database
-from sqlalchemy import create_engine, Column, Integer, String, Text, JSON, DateTime, select
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.sql import func
-from pgvector.sqlalchemy import Vector
+# 從 coding_help 模組匯入 agent 函式
+from backend.app.agents.debugging.coding_help.diagnostic_agent import (
+    generate_error_report,
+    determine_zpd_level
+)
+from backend.app.agents.debugging.coding_help.scaffolding_agent import (
+    decide_retrieval,
+    generate_scaffold_response,
+    get_relevant_documents
+)
+from backend.app.agents.debugging.coding_help.practice_agent import (
+    generate_practice_questions
+)
 
 # ======================================================
-# 1. 環境設定與資料庫連接
+# 1. 環境設定
 # ======================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql+psycopg2://kslab:Kslab35356!@cookaidb.czeeey0q2dkq.ap-northeast-1.rds.amazonaws.com:5432/cookai"
-)
-
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM = 1536
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
-Base = declarative_base()
-
-class DocumentChunk(Base):
-    __tablename__ = 'document_chunks'
-    __table_args__ = {'schema': 'debugging'}
-    id = Column(Integer, primary_key=True)
-    chunk = Column(Text, nullable=False)
-    chunk_metadata = Column('metadata', JSON, nullable=False)
-    embedding = Column(Vector(EMBEDDING_DIM), nullable=False)
-
-# 初始化 LLM (模仿 recommendation_bp 使用 gpt-4o)
-llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
-embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
+# 初始化 LLM
+llm = ChatOpenAI(model="gpt-5.1", temperature=0.3)
 
 # ======================================================
 # 2. State & Models 定義
@@ -65,141 +56,81 @@ class AgentState(TypedDict):
     practice_question: List[Dict]
     is_correct: bool            
 
+
 class RouteQuery(BaseModel):
+    """路由決策結果"""
     datasource: Literal["vector_store", "no_retrieval"]
     search_query: str
 
-# ======================================================
-# 3. 核心工具函式
-# ======================================================
-def get_relevant_documents(query: str, top_k: int = 3) -> List[str]:
-    if not query or not query.strip():
-        return []
-    session = SessionLocal()
-    try:
-        query_vector = embeddings.embed_query(query)
-        stmt = select(DocumentChunk).order_by(
-            DocumentChunk.embedding.cosine_distance(query_vector)
-        ).limit(top_k)
-        results = session.execute(stmt).scalars().all()
-        return [f"[教材內容]: {row.chunk}" for row in results]
-    except Exception as e:
-        logger.error(f"Retrieval error: {e}")
-        return []
-    finally:
-        session.close()
 
 # ======================================================
-# 4. Agent Nodes (重構重點)
+# 3. Agent Nodes (使用 coding_help 模組)
 # ======================================================
 
 async def diagnostic_agent(state: AgentState):
-    """分析錯誤並對應課程概念"""
-    prompt = f"""
-    你是一位專業的 Python 教學助理。請分析學生的錯誤並輸出 JSON。
-    程式題目: {state['problem_info']}
-    學生程式碼: {state['current_code']}
-    程式碼錯誤訊息: {state['error_message']}
+    """分析錯誤並對應課程概念 - 呼叫 coding_help.diagnostic_agent"""
+    # 生成錯誤報告
+    report = await generate_error_report(
+        current_code=state['current_code'],
+        error_message=state['error_message'],
+        problem_info=state['problem_info']
+    )
+    
+    # 判斷 ZPD Level
+    zpd_result = await determine_zpd_level(
+        previous_reports=state['previous_reports'],
+        current_report=report
+    )
+    
+    return {
+        "evidence_report": report,
+        "zpd_level": zpd_result["zpd_level"]
+    }
 
-    格式規範:
-    {{
-        "error_type": "Syntax (語法錯誤) / Logic (邏輯錯誤) / Runtime (執行錯誤)",
-        "location": "行號或區塊",
-        "misconception": "詳細解釋學生誤解的觀念 (繁體中文)",
-        "severity": "High/Medium/Low"
-    }}
-    """
-    response = await llm.ainvoke([SystemMessage(content="JSON only."), HumanMessage(content=prompt)])
-    try:
-        report = json.loads(response.content.replace("```json", "").replace("```", ""))
-    except:
-        report = {"error_type": "Unknown", "misconception": "解析失敗"}
-    return {"evidence_report": report}
 
 async def router_node(state: AgentState):
-    structured_llm_router = llm.with_structured_output(RouteQuery)
-    user_prompt = f"錯誤描述: {state['evidence_report'].get('misconception')}"
-    result = await structured_llm_router.ainvoke([
-        SystemMessage(content="判斷是否需要檢索教材。觀念問題選 vector_store，打字錯誤選 no_retrieval。"),
-        HumanMessage(content=user_prompt)
-    ])
-    return {"search_query": result.search_query if result.datasource == "vector_store" else ""}
+    """決定是否需要檢索教材 - 呼叫 coding_help.scaffolding_agent"""
+    route_result = await decide_retrieval(state['evidence_report'])
+    
+    search_query = ""
+    if route_result["datasource"] == "vector_store":
+        search_query = route_result.get("search_query", "")
+    
+    return {"search_query": search_query}
+
 
 async def retrieval_node(state: AgentState):
+    """執行教材檢索 - 呼叫 coding_help.scaffolding_agent"""
     docs = get_relevant_documents(state['search_query'])
     return {"retrieved_docs": docs}
 
-async def scaffolding_agent(state: AgentState):
-    """引導式教學 (Scaffolding)"""
-    report = state['evidence_report']
-    # 根據錯誤次數決定 ZPD 等級
-    repeat_count = sum(1 for rep in state['previous_reports'] if rep.get("error_type") == report.get("error_type"))
-    zpd, strategy = (1, "引導學生思考修正邏輯，可提供部分範例。") if repeat_count >= 2 else (2, "給予具體提示。") if repeat_count == 1 else (3, "僅給予方向性提示。")
 
-    rag_context = "\n".join(state.get('retrieved_docs', []))
-    prompt = f"""
-    你是一位專業且耐心的 Python 老師。請針對學生的錯誤提供引導。
+async def scaffolding_agent(state: AgentState):
+    """引導式教學 (Scaffolding) - 呼叫 coding_help.scaffolding_agent"""
+    response = await generate_scaffold_response(
+        zpd_level=state['zpd_level'],
+        evidence_report=state['evidence_report'],
+        problem_info=state['problem_info'],
+        current_code=state['current_code'],
+        retrieved_docs=state.get('retrieved_docs', [])
+    )
     
-    程式題目: {state['problem_info']} **注意**:輸出格式需參考sampls
-    學生程式碼: {state['current_code']}
-    診斷結果: {report.get('misconception')}
-    參考教材: {rag_context}
-    
-    【教學策略 (ZPD 等級 {zpd})】: {strategy}
-    
-    請遵守：
-    1. 使用繁體中文，**簡單明瞭**，條列式回覆，不帶任何情緒。
-    2. 嚴禁使用 Markdown 語法。
-    3. 依照策略強度提供引導，不要直接給出完整正確答案。
-    """
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
-    return {"zpd_level": zpd, "initial_response": response.content}
+    return {"initial_response": response}
+
 
 async def practice_agent(state: AgentState):
-    """生成鞏固練習題"""
-    valid_errors = [r for r in state.get('previous_reports', []) if r]
-    if not valid_errors and not state.get('is_correct'):
-        return {"practice_question": []}
+    """生成鞏固練習題 - 呼叫 coding_help.practice_agent"""
+    practice_q = await generate_practice_questions(
+        previous_reports=state.get('previous_reports', []),
+        problem_info=state.get('problem_info', {}),
+        current_report=state.get('evidence_report')
+    )
+    
+    return {"practice_question": practice_q}
 
-    prob_info = state.get('problem_info', {})
-    prompt = f"""
-    請根據學生之前的錯誤，設計 1 題「單選題」來鞏固觀念。
-    
-    題目目標: {prob_info}
-    學生弱點: {state['evidence_report'].get('misconception')}
-    
-    【生成規範】:
-    1. 題目敘述請用自然語言，避免直接寫出 Python 語法（例如：不要寫「使用 split()」，改寫「將字串以空格拆分」）。
-    2. 需給出**完整程式碼**，並在填空處用 "_____" 表示。
-    3. 提供 3 個選項，正確答案隨機分佈。
-    4. 每個選項需包含 feedback (回饋)。
-    
-    格式規範 (JSON Array):
-    [
-        {{
-            "id": "Q1",
-            "type": "logic", 
-            "question": {{
-                "text": "題目描述",
-                "code": {{ "content": "```python\\n<帶有錯誤的完整程式碼>\\n```", "language": "python" }}
-            }},
-            "options": [
-                {{ "id": 1, "label": "選項A", "feedback": "❌ 錯誤原因..." }},
-                {{ "id": 2, "label": "選項A", "feedback": "❌ 錯誤原因..." }}
-            ],
-            "answer_config": {{ "correct_id": 2, "explanation": "詳解..." }}
-        }}
-    ]
-    """
-    response = await llm.ainvoke([SystemMessage(content="JSON only."), HumanMessage(content=prompt)])
-    try:
-        practice_q = json.loads(response.content.replace("```json", "").replace("```", ""))
-        return {"practice_question": practice_q if isinstance(practice_q, list) else [practice_q]}
-    except:
-        return {"practice_question": []}
 
 # ======================================================
-# 5. Graph 建構 (Workflow)
+# 4. Graph 建構 (Workflow)
 # ======================================================
 workflow = StateGraph(AgentState)
 
@@ -209,11 +140,16 @@ workflow.add_node("retrieve", retrieval_node)
 workflow.add_node("scaffold_help", scaffolding_agent)
 workflow.add_node("generate_practice", practice_agent)
 
+
 def check_correctness(state: AgentState):
+    """判斷是否正確，決定走哪條路"""
     return "generate_practice" if state.get('is_correct') else "analyze_code"
 
+
 def decide_rag_path(state: AgentState):
+    """判斷是否需要檢索"""
     return "retrieve" if state.get("search_query") else "scaffold_help"
+
 
 workflow.add_conditional_edges(START, check_correctness)
 workflow.add_edge("analyze_code", "router")

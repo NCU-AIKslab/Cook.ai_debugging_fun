@@ -18,6 +18,8 @@ interface ProblemDetail {
 interface ChatMessage {
     role: 'user' | 'agent';
     content: string;
+    zpd?: number;
+    timestamp?: string;
     type?: 'scaffold' | 'chat';
 }
 
@@ -86,8 +88,8 @@ const StudentCodingHelp: React.FC = () => {
     // Practice State
     const [practiceList, setPracticeList] = useState<PracticeItem[]>([]);
     const [practiceId, setPracticeId] = useState<number | null>(null);
-    // [修改 1] 加入 'no_practice' 狀態
-    const [practiceStatus, setPracticeStatus] = useState<'locked' | 'todo' | 'done' | 'no_practice'>('locked');
+    // 新增 'generating' 狀態用於背景生成練習題時
+    const [practiceStatus, setPracticeStatus] = useState<'locked' | 'todo' | 'done' | 'no_practice' | 'generating'>('locked');
     const [userAnswers, setUserAnswers] = useState<QuestionAnswerState>({});
     const [feedbackMap, setFeedbackMap] = useState<QuestionFeedbackState>({});
 
@@ -97,6 +99,7 @@ const StudentCodingHelp: React.FC = () => {
 
     // 用來控制輪詢是否繼續的 Ref
     const isPollingRef = useRef(false);
+    const isPracticePollingRef = useRef(false);
 
     const isProblemSelected = !!selectedProblemId;
 
@@ -104,7 +107,10 @@ const StudentCodingHelp: React.FC = () => {
 
     // Cleanup polling on unmount
     useEffect(() => {
-        return () => { isPollingRef.current = false; };
+        return () => {
+            isPollingRef.current = false;
+            isPracticePollingRef.current = false;
+        };
     }, []);
 
     // Sidebar Dragging Logic
@@ -226,10 +232,22 @@ const StudentCodingHelp: React.FC = () => {
                 problem_id: selectedProblemId
             });
 
-            const { status, reply } = initRes.data;
+            const { status, reply, chat_log } = initRes.data;
 
-            if (status === 'resumed' && reply) {
-                setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+            if (status === 'resumed') {
+                // 優先使用 chat_log，若無則使用 reply
+                if (chat_log && chat_log.length > 0) {
+                    const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                        role: msg.role as 'user' | 'agent',
+                        content: msg.content,
+                        zpd: msg.zpd,
+                        timestamp: msg.timestamp,
+                        type: msg.type
+                    }));
+                    setChatMessages(msgs);
+                } else if (reply) {
+                    setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                }
                 setIsChatLoading(false);
                 isPollingRef.current = false;
             } else if (status === 'pending') {
@@ -249,6 +267,52 @@ const StudentCodingHelp: React.FC = () => {
         }
     };
 
+    // 練習題輪詢函式 (用於背景生成場景)
+    const pollForPractice = async (retryCount = 0) => {
+        if (!isPracticePollingRef.current) return;
+        if (retryCount > 30) {
+            // 超時處理：如果30次輪詢後仍無練習題，視為無練習題
+            setPracticeStatus('no_practice');
+            isPracticePollingRef.current = false;
+            return;
+        }
+
+        try {
+            const codeRes = await axios.get(`${API_BASE_URL}/debugging/student_code/${student.stu_id}/${selectedProblemId}`);
+            const { data } = codeRes.data;
+            const pInfo = data?.practice;
+
+            if (pInfo && pInfo.exists && pInfo.data && pInfo.data.length > 0) {
+                // 練習題已生成
+                setPracticeList(pInfo.data);
+                setPracticeId(pInfo.id);
+                const isCompleted = pInfo.completed;
+                setPracticeStatus(isCompleted ? 'done' : 'todo');
+
+                if (pInfo.student_answer && Array.isArray(pInfo.student_answer)) {
+                    const ansMap: QuestionAnswerState = {};
+                    const fbMap: QuestionFeedbackState = {};
+                    pInfo.student_answer.forEach((rec: any) => {
+                        ansMap[rec.q_id] = rec.selected_option_id;
+                        if (rec.is_correct) {
+                            fbMap[rec.q_id] = true;
+                        }
+                    });
+                    setUserAnswers(ansMap);
+                    setFeedbackMap(fbMap);
+                }
+
+                isPracticePollingRef.current = false;
+            } else {
+                // 繼續輪詢
+                setTimeout(() => pollForPractice(retryCount + 1), 2000);
+            }
+        } catch (error) {
+            console.error("Practice polling error:", error);
+            setTimeout(() => pollForPractice(retryCount + 1), 2000);
+        }
+    };
+
     // 2. 切換 Tab
     const handleTabChange = async (tab: 'editor' | 'chatbot' | 'practice') => {
         if (!selectedProblemId) return;
@@ -262,14 +326,17 @@ const StudentCodingHelp: React.FC = () => {
             setIsChatLoading(true);
             try {
                 const histRes = await axios.get(`${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`);
-                const history = histRes.data;
+                const chatLog = histRes.data.chat_log || [];
 
-                if (history && history.length > 0) {
-                    const msgs: ChatMessage[] = [];
-                    history.forEach((h: any) => {
-                        if (h.student) msgs.push({ role: 'user', content: h.student.content });
-                        if (h.agent) msgs.push({ role: 'agent', content: h.agent.content, type: h.agent.type });
-                    });
+                if (chatLog.length > 0) {
+                    // 使用新的 chat_log 格式
+                    const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
+                        role: msg.role as 'user' | 'agent',
+                        content: msg.content,
+                        zpd: msg.zpd,
+                        timestamp: msg.timestamp,
+                        type: msg.type
+                    }));
                     setChatMessages(msgs);
                     setIsChatLoading(false);
                 } else {
@@ -312,9 +379,9 @@ const StudentCodingHelp: React.FC = () => {
             if (isAC) {
                 setIsAccepted(true);
 
-                // [修改 3] 處理 AC 後的練習題邏輯
+                // 處理 AC 後的練習題邏輯
                 if (practice_question && Array.isArray(practice_question) && practice_question.length > 0) {
-                    // Case A: 有練習題
+                    // Case A: 有練習題 (立即回傳)
                     setPracticeList(practice_question);
                     setPracticeStatus('todo');
                     setActiveRightTab('practice');
@@ -329,11 +396,13 @@ const StudentCodingHelp: React.FC = () => {
                         console.error("Failed to fetch updated practice ID:", e);
                     }
                 } else {
-                    // Case B: 無練習題 (一次通過)
-                    // 設定狀態為 no_practice，並切換分頁顯示綠色勾勾
+                    // Case B: 練習題正在背景生成中
+                    // 設定狀態為 generating，並開始輪詢
                     setPracticeList([]);
-                    setPracticeStatus('no_practice');
+                    setPracticeStatus('generating');
                     setActiveRightTab('practice');
+                    isPracticePollingRef.current = true;
+                    pollForPractice();
                 }
             } else {
                 if (response.data.message) {
@@ -519,6 +588,7 @@ const StudentCodingHelp: React.FC = () => {
                             >
                                 <span>練習題</span>
                                 {practiceStatus === 'todo' && <span className="flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[10px]">!</span>}
+                                {practiceStatus === 'generating' && <span className="flex items-center justify-center w-4 h-4 rounded-full bg-yellow-500 text-white text-[10px] animate-pulse">⏳</span>}
                                 {/* 'done' 或 'no_practice' 都顯示勾勾 */}
                                 {(practiceStatus === 'done' || practiceStatus === 'no_practice') && <span className="flex items-center justify-center w-4 h-4 rounded-full bg-green-500 text-white text-[10px]">✓</span>}
                             </button>
@@ -569,15 +639,15 @@ const StudentCodingHelp: React.FC = () => {
                                     <div className="p-3 border-t bg-white flex space-x-2">
                                         <input
                                             className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
-                                            placeholder="針對錯誤提問..."
+                                            placeholder={isAccepted ? "題目已通過，無法繼續對話" : "針對錯誤提問..."}
                                             value={chatInput}
                                             onChange={(e) => setChatInput(e.target.value)}
-                                            onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
-                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected}
+                                            onKeyDown={(e) => e.key === 'Enter' && !isAccepted && handleSendChat()}
+                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
                                         />
                                         <button
                                             onClick={handleSendChat}
-                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected}
+                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
                                             className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:bg-gray-300"
                                         >
                                             Send
@@ -588,8 +658,15 @@ const StudentCodingHelp: React.FC = () => {
 
                             {activeRightTab === 'practice' && (
                                 <div className="flex flex-col h-full bg-white p-6 overflow-y-auto">
-                                    {/* [修改 5] 渲染邏輯更新 */}
-                                    {practiceStatus === 'no_practice' ? (
+                                    {/* 練習題生成中 */}
+                                    {practiceStatus === 'generating' ? (
+                                        <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-4">
+                                            <div className="text-4xl animate-bounce">🤔</div>
+                                            <p className="text-lg font-medium">正在為您生成客製化練習題...</p>
+                                            <p className="text-sm text-gray-400">請稍候，AI 正在根據您的錯誤歷史設計題目</p>
+                                            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                        </div>
+                                    ) : practiceStatus === 'no_practice' ? (
                                         // 無練習題時的畫面
                                         <div className="flex items-center justify-center h-full">
                                             <div className="bg-green-50 border border-green-200 p-6 rounded-lg text-green-800 text-center animate-fadeIn shadow-sm">

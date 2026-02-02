@@ -10,7 +10,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 # Initialize LLM
 llm = ChatOpenAI(
-    model="gpt-4o", 
+    model="gpt-5.1", 
     temperature=0.3,
     api_key=os.getenv("OPENAI_API_KEY")
 )

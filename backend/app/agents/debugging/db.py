@@ -128,6 +128,8 @@ dialogue_table = Table(
     Column("student_id", String, nullable=False),
     Column("problem_id", String, nullable=False),
     Column("num", Integer),            # 標記是第幾次 submit 的對話
+    Column("chat_log", JSONB, default=[]),  # 新欄位：儲存完整對話紀錄 [{"role": "user/agent", "content": "...", "zpd": 1, "timestamp": ...}]
+    # 以下欄位將不再使用，保留以相容舊資料
     Column("student_question", JSONB), 
     Column("agent_reply", JSONB),      
     Column("zpd_level", Integer),      
