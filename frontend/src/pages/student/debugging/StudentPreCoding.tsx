@@ -527,7 +527,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
 
     // --- 主介面渲染 ---
     return (
-        <div className="flex h-full w-full bg-white">
+        <div className="flex h-[calc(100vh-60px)] w-full bg-white">
 
             <Sidebar
                 isOpen={isSidebarOpen}

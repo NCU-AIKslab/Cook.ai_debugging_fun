@@ -16,18 +16,18 @@ function Student() {
         <Header paths={null} />
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* Scrollable container for main content + footer */}
+      <div className="flex-1 flex overflow-y-auto overflow-x-hidden">
         <StudentSidebar
           isSidebarOpen={isSidebarOpen}
           onToggle={toggleSidebar}
         />
-        <main className="flex-1 overflow-hidden relative bg-gray-50">
-          <Outlet />
-        </main>
-      </div>
-
-      <div className="flex-shrink-0">
-        <Footer />
+        <div className="flex-1 flex flex-col min-h-full">
+          <main className="flex-1 relative bg-gray-50">
+            <Outlet />
+          </main>
+          <Footer />
+        </div>
       </div>
     </div>
   );

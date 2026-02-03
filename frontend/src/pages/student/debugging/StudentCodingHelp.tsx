@@ -504,7 +504,7 @@ const StudentCodingHelp: React.FC = () => {
     };
 
     return (
-        <div className="flex h-full w-full bg-white">
+        <div className="flex h-[calc(100vh-60px)] w-full bg-white">
             <Sidebar isOpen={isSidebarOpen} selectedProblemId={selectedProblemId} onSelectProblem={setSelectedProblemId} />
 
             <div className="flex-1 flex flex-col h-full min-w-0">
@@ -599,7 +599,7 @@ const StudentCodingHelp: React.FC = () => {
                                 <>
                                     <div className="flex-1 relative bg-[#1e1e1e]">
                                         <textarea
-                                            className={`w-full h-full bg-[#1e1e1e] text-gray-300 font-mono text-sm p-4 outline-none resize-none border-none focus:ring-0 ${(isAccepted || !isProblemSelected) ? 'cursor-not-allowed opacity-80' : ''}`}
+                                            className={`w-full h-full bg-[#1e1e1e] text-gray-300 font-mono text-sm p-4 outline-none resize-none border-none focus:ring-0 whitespace-pre overflow-auto ${(isAccepted || !isProblemSelected) ? 'cursor-not-allowed opacity-80' : ''}`}
                                             value={studentCode}
                                             onChange={(e) => (!isAccepted && isProblemSelected) && setStudentCode(e.target.value)}
                                             spellCheck={false}
