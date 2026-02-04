@@ -10,11 +10,13 @@ interface RegisterData {
   stu_id: string;
   stu_name: string;
   stu_pwd: string;
+  role: 'student' | 'teacher';
 }
 
 interface RegisterResponse {
   stu_id: string;
   stu_name: string;
+  is_teacher: boolean;
   message: string;
 }
 
@@ -24,6 +26,7 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
     stu_name: '',
     stu_pwd: '',
     confirmPassword: '',
+    role: 'student' as 'student' | 'teacher',
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -72,6 +75,7 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
         stu_id: formData.stu_id,
         stu_name: formData.stu_name,
         stu_pwd: formData.stu_pwd,
+        role: formData.role,
       };
 
       const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
@@ -99,6 +103,7 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
         stu_name: '',
         stu_pwd: '',
         confirmPassword: '',
+        role: 'student',
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '註冊失敗，請稍後再試';
@@ -126,10 +131,43 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {/* 身分選擇 */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          身分 <span className="text-red-500">*</span>
+        </label>
+        <div className="flex gap-4">
+          <label className="flex items-center cursor-pointer">
+            <input
+              type="radio"
+              name="role"
+              value="student"
+              checked={formData.role === 'student'}
+              onChange={(e) => handleChange('role', e.target.value)}
+              className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+              disabled={isSubmitting}
+            />
+            <span className="ml-2 text-gray-700">學生</span>
+          </label>
+          <label className="flex items-center cursor-pointer">
+            <input
+              type="radio"
+              name="role"
+              value="teacher"
+              checked={formData.role === 'teacher'}
+              onChange={(e) => handleChange('role', e.target.value)}
+              className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+              disabled={isSubmitting}
+            />
+            <span className="ml-2 text-gray-700">教師</span>
+          </label>
+        </div>
+      </div>
+
       {/* 學號 */}
       <div>
         <label htmlFor="stu_id" className="block text-sm font-medium text-gray-700 mb-1">
-          學號 <span className="text-red-500">*</span>
+          {formData.role === 'teacher' ? '教師編號' : '學號'} <span className="text-red-500">*</span>
         </label>
         <input
           type="text"
@@ -140,7 +178,7 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
             ? 'border-red-500 focus:ring-red-500'
             : 'border-gray-300 focus:ring-blue-500'
             }`}
-          placeholder="例如：109123456"
+          placeholder={formData.role === 'teacher' ? '請輸入教師編號' : '例如：109123456'}
           disabled={isSubmitting}
         />
         {errors.stu_id && <p className="text-red-500 text-sm mt-1">{errors.stu_id}</p>}

@@ -1,13 +1,21 @@
 // frontend/src/components/auth/LoginModal.tsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
 import { useUser } from '../../contexts/UserContext';
 import Button from '../common/Button';
 import API_BASE_URL from '../../config/api';
+import GoogleRegisterModal from './GoogleRegisterModal';
 
 interface LoginModalProps {
     isOpen: boolean;
     onClose: () => void;
+}
+
+interface GoogleUserInfo {
+    email: string;
+    name: string;
+    picture: string;
 }
 
 export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
@@ -17,8 +25,14 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
-    if (!isOpen) return null;
+    // Google 註冊 Modal 狀態
+    const [showGoogleRegister, setShowGoogleRegister] = useState(false);
+    const [googleUserInfo, setGoogleUserInfo] = useState<GoogleUserInfo | null>(null);
+    const [pendingGoogleToken, setPendingGoogleToken] = useState<string | null>(null);
 
+    if (!isOpen && !showGoogleRegister) return null;
+
+    // 手動登入
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -42,7 +56,7 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
             const userData = {
                 user_id: data.stu_id,
                 full_name: data.stu_name,
-                role: 'student'
+                role: data.is_teacher ? 'teacher' : 'student'
             };
 
             localStorage.setItem('user', JSON.stringify(userData));
@@ -51,8 +65,8 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
             // 關閉 Modal
             onClose();
 
-            // 導向學生頁面
-            navigate('/student');
+            // 根據角色導向不同頁面
+            navigate(data.is_teacher ? '/teacher' : '/student');
         } catch (err: any) {
             setError(err.message || '登入失敗，請檢查您的學號密碼');
         } finally {
@@ -60,11 +74,134 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
         }
     };
 
+    // Google 登入成功
+    const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
+        setError('');
+        setIsLoading(true);
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: credentialResponse.credential })
+            });
+
+            const data = await response.json();
+
+            // 處理 404 USER_NOT_FOUND - 需要先註冊
+            if (response.status === 404 && data.code === 'USER_NOT_FOUND') {
+                // 保存 Google 使用者資訊並開啟註冊 Modal
+                setGoogleUserInfo({
+                    email: data.google_user?.email || '',
+                    name: data.google_user?.name || '',
+                    picture: data.google_user?.picture || ''
+                });
+                setPendingGoogleToken(credentialResponse.credential || null);
+                setShowGoogleRegister(true);
+                setIsLoading(false);
+                return;
+            }
+
+            if (!response.ok) {
+                throw new Error(data.detail || 'Google 登入失敗');
+            }
+
+            // 登入成功
+            const userData = {
+                user_id: data.user_id,
+                full_name: data.full_name,
+                role: data.is_teacher ? 'teacher' : 'student',
+                access_token: data.access_token,
+                email: data.email,
+                identifier: data.identifier,
+                department: data.department
+            };
+
+            localStorage.setItem('user', JSON.stringify(userData));
+            setUser(userData);
+
+            // 關閉 Modal
+            onClose();
+
+            // 根據角色導向不同頁面
+            navigate(data.is_teacher ? '/teacher' : '/student');
+        } catch (err: any) {
+            setError(err.message || 'Google 登入失敗');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Google 登入失敗
+    const handleGoogleError = () => {
+        setError('Google 登入失敗，請稍後再試');
+    };
+
     const handleClose = () => {
         setForm({ stu_id: '', stu_pwd: '' });
         setError('');
         onClose();
     };
+
+    // 註冊成功後自動登入
+    const handleRegisterSuccess = async () => {
+        setShowGoogleRegister(false);
+
+        // 註冊成功後，嘗試再次 Google 登入
+        if (pendingGoogleToken) {
+            setIsLoading(true);
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: pendingGoogleToken })
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.detail || '登入失敗');
+                }
+
+                const data = await response.json();
+
+                const userData = {
+                    user_id: data.user_id,
+                    full_name: data.full_name,
+                    role: data.is_teacher ? 'teacher' : 'student',
+                    access_token: data.access_token,
+                    email: data.email,
+                    identifier: data.identifier,
+                    department: data.department
+                };
+
+                localStorage.setItem('user', JSON.stringify(userData));
+                setUser(userData);
+                onClose();
+                navigate(data.is_teacher ? '/teacher' : '/student');
+            } catch (err: any) {
+                setError(err.message || '登入失敗，請重新點擊 Google 登入');
+            } finally {
+                setIsLoading(false);
+                setPendingGoogleToken(null);
+            }
+        }
+    };
+
+    // 渲染 Google 註冊 Modal
+    if (showGoogleRegister && googleUserInfo) {
+        return (
+            <GoogleRegisterModal
+                isOpen={showGoogleRegister}
+                onClose={() => {
+                    setShowGoogleRegister(false);
+                    setGoogleUserInfo(null);
+                    setPendingGoogleToken(null);
+                }}
+                googleUser={googleUserInfo}
+                onSuccess={handleRegisterSuccess}
+            />
+        );
+    }
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
@@ -111,6 +248,30 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
                             <span>{error}</span>
                         </div>
                     )}
+
+                    {/* Google 登入按鈕 */}
+                    <div className="mb-6">
+                        <div className="flex justify-center">
+                            <GoogleLogin
+                                onSuccess={handleGoogleSuccess}
+                                onError={handleGoogleError}
+                                text="signin_with"
+                                shape="rectangular"
+                                size="large"
+                                width="320"
+                            />
+                        </div>
+                    </div>
+
+                    {/* 分隔線 */}
+                    <div className="relative my-6">
+                        <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-gray-300"></div>
+                        </div>
+                        <div className="relative flex justify-center text-sm">
+                            <span className="px-2 bg-white text-gray-500">或使用學號登入</span>
+                        </div>
+                    </div>
 
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div>

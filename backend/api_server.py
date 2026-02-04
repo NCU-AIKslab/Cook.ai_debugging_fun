@@ -18,6 +18,11 @@ app = FastAPI(
 origins = [
     "http://localhost:3001",
     "http://140.115.54.162:3001",
+    "http://140.115.54.167:3001",
+    "http://cookai-debugging-lab.moocs.tw:3001",
+    "http://cookai-debugging-lab.moocs.tw",
+    "https://cookai-debugging-lab.moocs.tw:3001",
+    "https://cookai-debugging-lab.moocs.tw",
 ]
 
 app.add_middleware(

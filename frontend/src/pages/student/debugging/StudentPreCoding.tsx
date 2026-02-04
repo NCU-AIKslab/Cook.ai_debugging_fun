@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { useUser } from '../../../contexts/UserContext'; // 假設路徑正確
 import Sidebar from '../../../components/student/debugging/Sidebar'; // 假設路徑正確
-
-const API_BASE_URL = "http://127.0.0.1:8000";
+import API_BASE_URL from '../../../config/api';
 
 // --- 1. 介面定義 ---
 

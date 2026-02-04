@@ -209,7 +209,7 @@ class UnderstandingAgent:
             agent_reply = result.get("reply", "請試著描述這題的輸入是什麼？")
             score = min(4, max(1, int(result.get("score", 1))))
             has_decomposition = result.get("has_decomposition", False)
-            should_transition = score >= 3
+            should_transition = score >= 4
             
             # 5. 針對「Agent 這次產生的新回覆」生成建議選項
             suggested_replies = await SuggestionAgent.generate(agent_reply, chat_history, problem_context)
@@ -310,7 +310,7 @@ class DecompositionAgent:
             
             agent_reply = result.get("reply", "請試著列出解決這題需要的步驟")
             score = min(4, max(1, int(result.get("score", 1))))
-            is_complete = score >= 3
+            is_complete = score >= 4
             
             # 5. 針對新回覆生成建議
             suggested_replies = await SuggestionAgent.generate(agent_reply, chat_history, problem_context)

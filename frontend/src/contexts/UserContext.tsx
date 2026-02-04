@@ -2,10 +2,13 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
 interface User {
-    user_id: number;
-    email: string;
+    user_id: string;
+    email?: string;
     full_name: string;
     role: string;
+    access_token?: string;
+    identifier?: string;
+    department?: string;
 }
 
 interface UserContextType {
