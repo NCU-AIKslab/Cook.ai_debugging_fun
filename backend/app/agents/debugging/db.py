@@ -1,5 +1,6 @@
 import os
 import json
+import atexit
 from sqlalchemy import (
     create_engine, MetaData, Table, Column, String, Integer, DateTime, Boolean,
     select, insert, update, and_, func, desc
@@ -7,6 +8,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 from dotenv import load_dotenv
+from sshtunnel import SSHTunnelForwarder
 
 from .OJ.models import ProblemConfig, TestCase, CaseResult, CaseStatus
 
@@ -15,6 +17,59 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 engine = create_engine(DATABASE_URL)
 metadata = MetaData()
+
+# ==========================================
+# Cooklogin DB Connection (SSH Tunnel)
+# ==========================================
+COOKLOGIN_SSH_HOST = os.getenv("COOKLOGIN_SSH_HOST")
+COOKLOGIN_SSH_PORT = int(os.getenv("COOKLOGIN_SSH_PORT", 22))
+COOKLOGIN_SSH_USER = os.getenv("COOKLOGIN_SSH_USER")
+COOKLOGIN_SSH_PASSWORD = os.getenv("COOKLOGIN_SSH_PASSWORD")
+COOKLOGIN_PG_HOST = os.getenv("COOKLOGIN_PG_HOST", "localhost")
+COOKLOGIN_PG_PORT = int(os.getenv("COOKLOGIN_PG_PORT", 5432))
+COOKLOGIN_PG_USER = os.getenv("COOKLOGIN_PG_USER")
+COOKLOGIN_PG_PASSWORD = os.getenv("COOKLOGIN_PG_PASSWORD")
+COOKLOGIN_PG_DB = os.getenv("COOKLOGIN_PG_DB")
+
+# SSH Tunnel singleton
+_ssh_tunnel = None
+cooklogin_engine = None
+cooklogin_metadata = MetaData()
+
+def get_cooklogin_engine():
+    """Get or create cooklogin_db engine with SSH tunnel"""
+    global _ssh_tunnel, cooklogin_engine
+    
+    if cooklogin_engine is not None:
+        return cooklogin_engine
+    
+    if not all([COOKLOGIN_SSH_HOST, COOKLOGIN_SSH_USER, COOKLOGIN_SSH_PASSWORD, COOKLOGIN_PG_DB]):
+        print("Warning: Cooklogin DB config incomplete, using default engine")
+        cooklogin_engine = engine
+        return cooklogin_engine
+    
+    try:
+        _ssh_tunnel = SSHTunnelForwarder(
+            (COOKLOGIN_SSH_HOST, COOKLOGIN_SSH_PORT),
+            ssh_username=COOKLOGIN_SSH_USER,
+            ssh_password=COOKLOGIN_SSH_PASSWORD,
+            remote_bind_address=(COOKLOGIN_PG_HOST, COOKLOGIN_PG_PORT)
+        )
+        _ssh_tunnel.start()
+        
+        local_port = _ssh_tunnel.local_bind_port
+        cooklogin_url = f"postgresql+psycopg2://{COOKLOGIN_PG_USER}:{COOKLOGIN_PG_PASSWORD}@127.0.0.1:{local_port}/{COOKLOGIN_PG_DB}"
+        cooklogin_engine = create_engine(cooklogin_url)
+        
+        # Register cleanup
+        atexit.register(lambda: _ssh_tunnel.stop() if _ssh_tunnel else None)
+        
+        print(f"Cooklogin DB tunnel established on local port {local_port}")
+    except Exception as e:
+        print(f"Failed to create SSH tunnel for cooklogin_db: {e}")
+        cooklogin_engine = engine  # Fallback
+    
+    return cooklogin_engine
 
 # ==========================================
 # 1. OJ 基礎 Tables
@@ -165,6 +220,63 @@ practice_table = Table(
     Column("student_answer", JSONB),      
     Column("answer_is_correct", Boolean), # 整體是否通過
     Column("submitted_at", DateTime, server_default=func.now()),
+    schema="debugging",
+    extend_existing=True,
+)
+
+# ==========================================
+# 4. Users Tables (驗證系統)
+# ==========================================
+
+# 4a. Cooklogin DB - users table (Google login)
+# Columns matching remote DB schema (verified via db_inspect.py)
+cooklogin_user_table = Table(
+    "users",
+    cooklogin_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("username", String(50), nullable=True),
+    Column("email", String(100), nullable=True),
+    Column("google_id", String(255), nullable=True),
+    Column("avatar", String(255), nullable=True),
+    Column("role", String(20), nullable=True),
+    Column("hashed_password", String(255), nullable=True),
+    Column("created_at", DateTime, nullable=True),
+    Column("full_name", String(100), nullable=True),
+    Column("identifier", String(50), nullable=True),
+    Column("department", String(100), nullable=True),
+    Column("verified", Boolean, default=False),
+    extend_existing=True,
+)
+
+# 4b. Cookai DB - user_info table (一般登入用)
+# 連線至預設 cookai 資料庫
+user_info_table = Table(
+    "user_info",
+    metadata,
+    Column("stu_id", String(50), primary_key=True),  # 學號
+    Column("stu_name", String(100), nullable=False),
+    Column("stu_pwd", String(255), nullable=False),  # 密碼 (可能是明文或 hash)
+    Column("is_teacher", Boolean, default=False),  # 教師需後台手動開通
+    Column("email", String(255), nullable=True),
+    Column("semester", String(20), nullable=True),
+    Column("department", String(100), nullable=True),
+    schema="debugging",
+    extend_existing=True,
+)
+
+# [DEPRECATED] 舊 users table - 保留向後相容
+users_table = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("student_id", String(50), nullable=False, unique=True),
+    Column("name", String(100), nullable=False),
+    Column("email", String(255), nullable=True),
+    Column("password_hash", String(255), nullable=True),
+    Column("role", String(20), default="student"),
+    Column("department", String(100), nullable=True),
+    Column("is_approved", Boolean, default=True),
+    Column("created_at", DateTime, server_default=func.now()),
     schema="debugging",
     extend_existing=True,
 )

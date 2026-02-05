@@ -52,12 +52,26 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
 
             const data = await response.json();
 
+            console.log('[LoginDebug] Raw keys:', Object.keys(data));
+            console.log('[LoginDebug] is_teacher val:', data.is_teacher, 'type:', typeof data.is_teacher);
+
+            const isTeacherBool = Boolean(data.is_teacher);
+            const roleStr = isTeacherBool ? 'teacher' : 'student';
+
+            console.log('[LoginDebug] Resolved Role:', roleStr);
+
             // 儲存使用者資訊
+            // Align with Google Login structure (role, identifier)
             const userData = {
                 user_id: data.stu_id,
                 full_name: data.stu_name,
-                role: data.is_teacher ? 'teacher' : 'student'
+                role: roleStr,
+                identifier: data.stu_id, // Use stu_id as identifier for local users
+                email: "" // Local users may not have email populated in response yet
             };
+
+            console.log('[LoginDebug] API Response:', data);
+            console.log('[LoginDebug] UserData to save:', userData);
 
             localStorage.setItem('user', JSON.stringify(userData));
             setUser(userData);
@@ -108,7 +122,7 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
 
             // 登入成功
             const userData = {
-                user_id: data.user_id,
+                user_id: data.identifier, // Use identifier (student ID/name) as user_id
                 full_name: data.full_name,
                 role: data.is_teacher ? 'teacher' : 'student',
                 access_token: data.access_token,
@@ -165,7 +179,7 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
                 const data = await response.json();
 
                 const userData = {
-                    user_id: data.user_id,
+                    user_id: data.identifier, // Use identifier (student ID/name) as user_id
                     full_name: data.full_name,
                     role: data.is_teacher ? 'teacher' : 'student',
                     access_token: data.access_token,

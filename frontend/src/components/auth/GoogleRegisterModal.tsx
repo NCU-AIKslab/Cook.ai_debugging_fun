@@ -1,5 +1,5 @@
 // frontend/src/components/auth/GoogleRegisterModal.tsx
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useEffect } from 'react';
 import API_BASE_URL from '../../config/api';
 
 interface GoogleUserInfo {
@@ -23,7 +23,7 @@ export default function GoogleRegisterModal({
 }: GoogleRegisterModalProps) {
     const [formData, setFormData] = useState({
         email: googleUser.email,
-        full_name: googleUser.name,
+        full_name: '', // 不預設為 Gmail 名字
         identifier: '',
         department: '',
         role: 'student' as 'student' | 'teacher'
@@ -32,15 +32,29 @@ export default function GoogleRegisterModal({
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState('');
+    const [submitSuccess, setSubmitSuccess] = useState('');
+
+    // 當 googleUser 改變時重置 email
+    useEffect(() => {
+        setFormData(prev => ({
+            ...prev,
+            email: googleUser.email,
+            full_name: '' // 保持空白
+        }));
+    }, [googleUser.email]);
 
     if (!isOpen) return null;
+
+    // 是否為教師
+    const isTeacher = formData.role === 'teacher';
 
     // 驗證表單
     const validateForm = (): boolean => {
         const newErrors: Record<string, string> = {};
 
-        if (!formData.identifier) {
-            newErrors.identifier = formData.role === 'teacher' ? '教師編號為必填欄位' : '學號為必填欄位';
+        // 學生需要填寫學號
+        if (!isTeacher && !formData.identifier) {
+            newErrors.identifier = '學號為必填欄位';
         }
 
         if (!formData.full_name) {
@@ -61,27 +75,38 @@ export default function GoogleRegisterModal({
 
         setIsSubmitting(true);
         setSubmitError('');
+        setSubmitSuccess('');
 
         try {
+            // 教師使用姓名作為 identifier
+            const identifier = isTeacher ? formData.full_name : formData.identifier;
+
             const response = await fetch(`${API_BASE_URL}/api/auth/register-google`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     email: formData.email,
                     full_name: formData.full_name,
-                    identifier: formData.identifier,
+                    identifier: identifier,
                     department: formData.department,
                     role: formData.role
                 })
             });
 
+            const result = await response.json();
+
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || '註冊失敗');
+                throw new Error(result.detail || '註冊失敗');
             }
 
             // 註冊成功
-            onSuccess();
+            if (isTeacher) {
+                // 教師需審核，顯示訊息
+                setSubmitSuccess(result.message || '註冊成功，您的帳號需經管理員審核後方可使用。');
+            } else {
+                // 學生直接成功
+                onSuccess();
+            }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : '註冊失敗，請稍後再試';
             setSubmitError(errorMessage);
@@ -140,132 +165,157 @@ export default function GoogleRegisterModal({
                         您的 Google 帳號尚未註冊，請填寫以下資訊完成註冊：
                     </p>
 
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        {/* 身分選擇 */}
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                身分 <span className="text-red-500">*</span>
-                            </label>
-                            <div className="flex gap-4">
-                                <label className="flex items-center cursor-pointer">
+                    {/* 成功訊息 (教師審核) */}
+                    {submitSuccess && (
+                        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4">
+                            <p className="font-medium">註冊成功！</p>
+                            <p className="text-sm">{submitSuccess}</p>
+                            <button
+                                onClick={onClose}
+                                className="mt-2 text-sm underline"
+                            >
+                                關閉視窗
+                            </button>
+                        </div>
+                    )}
+
+                    {!submitSuccess && (
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            {/* 身分選擇 */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                    身分 <span className="text-red-500">*</span>
+                                </label>
+                                <div className="flex gap-4">
+                                    <label className="flex items-center cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="role"
+                                            value="student"
+                                            checked={formData.role === 'student'}
+                                            onChange={(e) => handleChange('role', e.target.value)}
+                                            className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                            disabled={isSubmitting}
+                                        />
+                                        <span className="ml-2 text-gray-700">學生</span>
+                                    </label>
+                                    <label className="flex items-center cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="role"
+                                            value="teacher"
+                                            checked={formData.role === 'teacher'}
+                                            onChange={(e) => handleChange('role', e.target.value)}
+                                            className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                            disabled={isSubmitting}
+                                        />
+                                        <span className="ml-2 text-gray-700">教師</span>
+                                    </label>
+                                </div>
+                                {isTeacher && (
+                                    <p className="text-xs text-amber-600 mt-1">
+                                        ⚠️ 教師帳號需經管理員審核後方可使用
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* 學號 (僅學生顯示) */}
+                            {!isTeacher && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        學號 <span className="text-red-500">*</span>
+                                    </label>
                                     <input
-                                        type="radio"
-                                        name="role"
-                                        value="student"
-                                        checked={formData.role === 'student'}
-                                        onChange={(e) => handleChange('role', e.target.value)}
-                                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                        type="text"
+                                        value={formData.identifier}
+                                        onChange={(e) => handleChange('identifier', e.target.value)}
+                                        className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${errors.identifier
+                                            ? 'border-red-500 focus:ring-red-500'
+                                            : 'border-gray-300 focus:ring-blue-500'
+                                            }`}
+                                        placeholder="例如：109123456"
                                         disabled={isSubmitting}
                                     />
-                                    <span className="ml-2 text-gray-700">學生</span>
+                                    {errors.identifier && <p className="text-red-500 text-sm mt-1">{errors.identifier}</p>}
+                                </div>
+                            )}
+
+                            {/* 姓名 */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    姓名 <span className="text-red-500">*</span>
                                 </label>
-                                <label className="flex items-center cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="role"
-                                        value="teacher"
-                                        checked={formData.role === 'teacher'}
-                                        onChange={(e) => handleChange('role', e.target.value)}
-                                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                        disabled={isSubmitting}
-                                    />
-                                    <span className="ml-2 text-gray-700">教師</span>
+                                <input
+                                    type="text"
+                                    value={formData.full_name}
+                                    onChange={(e) => handleChange('full_name', e.target.value)}
+                                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${errors.full_name
+                                        ? 'border-red-500 focus:ring-red-500'
+                                        : 'border-gray-300 focus:ring-blue-500'
+                                        }`}
+                                    placeholder="請輸入真實姓名"
+                                    disabled={isSubmitting}
+                                />
+                                {errors.full_name && <p className="text-red-500 text-sm mt-1">{errors.full_name}</p>}
+                            </div>
+
+                            {/* 系所/單位 */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    {isTeacher ? '服務單位' : '系所'}
                                 </label>
+                                <input
+                                    type="text"
+                                    value={formData.department}
+                                    onChange={(e) => handleChange('department', e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder={isTeacher ? "例如：資訊工程學系" : "例如：資訊工程學系"}
+                                    disabled={isSubmitting}
+                                />
                             </div>
-                        </div>
 
-                        {/* 學號/教師編號 */}
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                {formData.role === 'teacher' ? '教師編號' : '學號'} <span className="text-red-500">*</span>
-                            </label>
-                            <input
-                                type="text"
-                                value={formData.identifier}
-                                onChange={(e) => handleChange('identifier', e.target.value)}
-                                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${errors.identifier
-                                    ? 'border-red-500 focus:ring-red-500'
-                                    : 'border-gray-300 focus:ring-blue-500'
-                                    }`}
-                                placeholder={formData.role === 'teacher' ? '請輸入教師編號' : '例如：109123456'}
-                                disabled={isSubmitting}
-                            />
-                            {errors.identifier && <p className="text-red-500 text-sm mt-1">{errors.identifier}</p>}
-                        </div>
-
-                        {/* 姓名 */}
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                姓名 <span className="text-red-500">*</span>
-                            </label>
-                            <input
-                                type="text"
-                                value={formData.full_name}
-                                onChange={(e) => handleChange('full_name', e.target.value)}
-                                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${errors.full_name
-                                    ? 'border-red-500 focus:ring-red-500'
-                                    : 'border-gray-300 focus:ring-blue-500'
-                                    }`}
-                                placeholder="請輸入中文姓名"
-                                disabled={isSubmitting}
-                            />
-                            {errors.full_name && <p className="text-red-500 text-sm mt-1">{errors.full_name}</p>}
-                        </div>
-
-                        {/* 系所/單位 */}
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                系所/單位
-                            </label>
-                            <input
-                                type="text"
-                                value={formData.department}
-                                onChange={(e) => handleChange('department', e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="例如：資訊工程學系"
-                                disabled={isSubmitting}
-                            />
-                        </div>
-
-                        {/* Email (唯讀) */}
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                Email
-                            </label>
-                            <input
-                                type="email"
-                                value={formData.email}
-                                readOnly
-                                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
-                            />
-                            <p className="text-xs text-gray-400 mt-1">此 Email 與您的 Google 帳號關聯，無法修改</p>
-                        </div>
-
-                        {/* 錯誤訊息 */}
-                        {submitError && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                                {submitError}
+                            {/* Email (唯讀) */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Email
+                                </label>
+                                <input
+                                    type="email"
+                                    value={formData.email}
+                                    readOnly
+                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+                                />
+                                <p className="text-xs text-gray-400 mt-1">此 Email 與您的 Google 帳號關聯，無法修改</p>
                             </div>
-                        )}
 
-                        {/* 提交按鈕 */}
-                        <button
-                            type="submit"
-                            disabled={isSubmitting}
-                            className={`w-full py-3 px-4 rounded-lg font-medium text-white transition-all ${isSubmitting
-                                ? 'bg-gray-400 cursor-not-allowed'
-                                : 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:shadow-lg hover:-translate-y-0.5'
-                                }`}
-                        >
-                            {isSubmitting ? '註冊中...' : '完成註冊'}
-                        </button>
-                    </form>
+                            {/* 錯誤訊息 */}
+                            {submitError && (
+                                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                                    {submitError}
+                                </div>
+                            )}
+
+                            {/* 提交按鈕 */}
+                            <button
+                                type="submit"
+                                disabled={isSubmitting}
+                                className={`w-full py-3 px-4 rounded-lg font-medium text-white transition-all ${isSubmitting
+                                    ? 'bg-gray-400 cursor-not-allowed'
+                                    : 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:shadow-lg hover:-translate-y-0.5'
+                                    }`}
+                            >
+                                {isSubmitting ? '註冊中...' : '完成註冊'}
+                            </button>
+                        </form>
+                    )}
                 </div>
 
                 {/* Footer */}
                 <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
                     <p className="text-xs text-gray-500 text-center">
-                        註冊完成後將自動登入系統
+                        {isTeacher
+                            ? '教師帳號審核通過後，將發送 Email 通知'
+                            : '學生帳號註冊完成後將自動登入系統'}
                     </p>
                 </div>
             </div>

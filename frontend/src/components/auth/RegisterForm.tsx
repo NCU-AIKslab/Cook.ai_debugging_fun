@@ -32,26 +32,25 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const isTeacher = formData.role === 'teacher';
+
   // 驗證表單
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    // 學號驗證
-    if (!formData.stu_id) {
+    // 學生必填學號
+    if (!isTeacher && !formData.stu_id) {
       newErrors.stu_id = '學號為必填欄位';
     }
 
-    // 姓名驗證
     if (!formData.stu_name) {
       newErrors.stu_name = '姓名為必填欄位';
     }
 
-    // 密碼驗證
     if (!formData.stu_pwd) {
       newErrors.stu_pwd = '密碼為必填欄位';
     }
 
-    // 確認密碼驗證
     if (formData.stu_pwd !== formData.confirmPassword) {
       newErrors.confirmPassword = '密碼不一致';
     }
@@ -72,7 +71,8 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
 
     try {
       const registerData: RegisterData = {
-        stu_id: formData.stu_id,
+        // 教師自動使用姓名作為 ID
+        stu_id: isTeacher ? formData.stu_name : formData.stu_id,
         stu_name: formData.stu_name,
         stu_pwd: formData.stu_pwd,
         role: formData.role,
@@ -119,7 +119,6 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
   // 處理輸入變化
   const handleChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
-    // 清除該欄位的錯誤訊息
     if (errors[field]) {
       setErrors(prev => {
         const newErrors = { ...prev };
@@ -162,27 +161,34 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
             <span className="ml-2 text-gray-700">教師</span>
           </label>
         </div>
+        {isTeacher && (
+          <p className="text-xs text-amber-600 mt-1">
+            ⚠️ 教師身分需等待後臺確認才能使用
+          </p>
+        )}
       </div>
 
-      {/* 學號 */}
-      <div>
-        <label htmlFor="stu_id" className="block text-sm font-medium text-gray-700 mb-1">
-          {formData.role === 'teacher' ? '教師編號' : '學號'} <span className="text-red-500">*</span>
-        </label>
-        <input
-          type="text"
-          id="stu_id"
-          value={formData.stu_id}
-          onChange={(e) => handleChange('stu_id', e.target.value)}
-          className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${errors.stu_id
-            ? 'border-red-500 focus:ring-red-500'
-            : 'border-gray-300 focus:ring-blue-500'
-            }`}
-          placeholder={formData.role === 'teacher' ? '請輸入教師編號' : '例如：109123456'}
-          disabled={isSubmitting}
-        />
-        {errors.stu_id && <p className="text-red-500 text-sm mt-1">{errors.stu_id}</p>}
-      </div>
+      {/* 學號 (僅學生顯示) */}
+      {!isTeacher && (
+        <div>
+          <label htmlFor="stu_id" className="block text-sm font-medium text-gray-700 mb-1">
+            學號 <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            id="stu_id"
+            value={formData.stu_id}
+            onChange={(e) => handleChange('stu_id', e.target.value)}
+            className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${errors.stu_id
+              ? 'border-red-500 focus:ring-red-500'
+              : 'border-gray-300 focus:ring-blue-500'
+              }`}
+            placeholder="例如：109123456"
+            disabled={isSubmitting}
+          />
+          {errors.stu_id && <p className="text-red-500 text-sm mt-1">{errors.stu_id}</p>}
+        </div>
+      )}
 
       {/* 姓名 */}
       <div>

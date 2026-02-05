@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
 import { useUser } from '../../contexts/UserContext';
 import API_BASE_URL from '../../config/api';
+import RegisterForm from './RegisterForm';
 
 interface RegisterModalProps {
   isOpen: boolean;
@@ -16,12 +17,17 @@ interface GoogleUserInfo {
   picture: string;
 }
 
+type RegisterMode = 'select' | 'google' | 'local';
+
 export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   const navigate = useNavigate();
   const { setUser } = useUser();
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // 註冊模式
+  const [registerMode, setRegisterMode] = useState<RegisterMode>('select');
 
   // 註冊表單狀態
   const [showRegisterForm, setShowRegisterForm] = useState(false);
@@ -31,7 +37,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   // 註冊表單資料
   const [formData, setFormData] = useState({
     email: '',
-    full_name: '',
+    full_name: '',  // 姓名預設空白
     identifier: '',
     department: '',
     role: 'student' as 'student' | 'teacher'
@@ -40,12 +46,16 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
 
   if (!isOpen) return null;
 
+  // 是否為教師
+  const isTeacher = formData.role === 'teacher';
+
   const handleClose = () => {
     setSuccessMessage('');
     setErrorMessage('');
     setShowRegisterForm(false);
     setGoogleUserInfo(null);
     setPendingGoogleToken(null);
+    setRegisterMode('select');
     setFormData({
       email: '',
       full_name: '',
@@ -84,7 +94,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
         setFormData(prev => ({
           ...prev,
           email: googleUser.email || '',
-          full_name: googleUser.name || ''
+          full_name: ''  // 姓名預設空白，不使用 Gmail 名字
         }));
         setShowRegisterForm(true);
         setIsLoading(false);
@@ -151,8 +161,9 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
       newErrors.full_name = '姓名為必填欄位';
     }
 
-    if (!formData.identifier) {
-      newErrors.identifier = formData.role === 'teacher' ? '教師編號為必填欄位' : '學號為必填欄位';
+    // 學生需要填寫學號，教師不需要（用姓名作為 identifier）
+    if (!isTeacher && !formData.identifier) {
+      newErrors.identifier = '學號為必填欄位';
     }
 
     setFormErrors(newErrors);
@@ -171,6 +182,9 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
     setErrorMessage('');
 
     try {
+      // 教師使用姓名作為 identifier
+      const identifier = isTeacher ? formData.full_name : formData.identifier;
+
       // 1. 呼叫 register-google API (Central Auth register-direct)
       const registerResponse = await fetch(`${API_BASE_URL}/api/auth/register-google`, {
         method: 'POST',
@@ -178,18 +192,27 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
         body: JSON.stringify({
           email: formData.email,
           full_name: formData.full_name,
-          identifier: formData.identifier,
+          identifier: identifier,
           department: formData.department,
           role: formData.role
         })
       });
 
+      const result = await registerResponse.json();
+
       if (!registerResponse.ok) {
-        const error = await registerResponse.json();
-        throw new Error(error.detail || '註冊失敗');
+        throw new Error(result.detail || '註冊失敗');
       }
 
-      // 2. 註冊成功後，嘗試再次 Google 登入
+      // 2. 教師需審核
+      if (isTeacher) {
+        setSuccessMessage(result.message || '註冊成功！您的帳號需經管理員審核後方可使用。');
+        setShowRegisterForm(false);
+        setIsLoading(false);
+        return;
+      }
+
+      // 3. 學生註冊成功後，嘗試再次 Google 登入
       if (pendingGoogleToken) {
         const loginResponse = await fetch(`${API_BASE_URL}/api/auth/google`, {
           method: 'POST',
@@ -232,13 +255,25 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
     }
   };
 
+  // 一般註冊成功
+  const handleLocalRegisterSuccess = (message: string) => {
+    setSuccessMessage(message);
+    setRegisterMode('select');
+  };
+
+  // 一般註冊失敗
+  const handleLocalRegisterError = (error: string) => {
+    setErrorMessage(error);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
       <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <h2 className="text-2xl font-bold text-gray-800">
-            {showRegisterForm ? '完成註冊' : '註冊'}
+            {showRegisterForm ? '完成 Google 註冊' :
+              registerMode === 'local' ? '學生註冊' : '註冊'}
           </h2>
           <button
             onClick={handleClose}
@@ -255,11 +290,19 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
         <div className="p-6">
           {/* 成功訊息 */}
           {successMessage && (
-            <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center">
-              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              <span>{successMessage}</span>
+            <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
+              <div className="flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span>{successMessage}</span>
+              </div>
+              <button
+                onClick={handleClose}
+                className="mt-2 text-sm underline"
+              >
+                關閉
+              </button>
             </div>
           )}
 
@@ -273,7 +316,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
             </div>
           )}
 
-          {/* 顯示註冊表單 */}
+          {/* 顯示 Google 註冊表單 */}
           {showRegisterForm && googleUserInfo ? (
             <>
               {/* Google 帳號資訊 */}
@@ -327,26 +370,33 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
                       <span className="ml-2 text-gray-700">教師</span>
                     </label>
                   </div>
+                  {isTeacher && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      ⚠️ 教師帳號需經管理員審核後方可使用
+                    </p>
+                  )}
                 </div>
 
-                {/* 學號/教師編號 */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {formData.role === 'teacher' ? '教師編號' : '學號'} <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.identifier}
-                    onChange={(e) => handleChange('identifier', e.target.value)}
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${formErrors.identifier
-                      ? 'border-red-500 focus:ring-red-500'
-                      : 'border-gray-300 focus:ring-blue-500'
-                      }`}
-                    placeholder={formData.role === 'teacher' ? '請輸入教師編號' : '例如：109123456'}
-                    disabled={isLoading}
-                  />
-                  {formErrors.identifier && <p className="text-red-500 text-sm mt-1">{formErrors.identifier}</p>}
-                </div>
+                {/* 學號 (僅學生顯示) */}
+                {!isTeacher && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      學號 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.identifier}
+                      onChange={(e) => handleChange('identifier', e.target.value)}
+                      className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${formErrors.identifier
+                        ? 'border-red-500 focus:ring-red-500'
+                        : 'border-gray-300 focus:ring-blue-500'
+                        }`}
+                      placeholder="例如：109123456"
+                      disabled={isLoading}
+                    />
+                    {formErrors.identifier && <p className="text-red-500 text-sm mt-1">{formErrors.identifier}</p>}
+                  </div>
+                )}
 
                 {/* 姓名 */}
                 <div>
@@ -361,23 +411,23 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
                       ? 'border-red-500 focus:ring-red-500'
                       : 'border-gray-300 focus:ring-blue-500'
                       }`}
-                    placeholder="請輸入中文姓名"
+                    placeholder="請輸入真實姓名"
                     disabled={isLoading}
                   />
                   {formErrors.full_name && <p className="text-red-500 text-sm mt-1">{formErrors.full_name}</p>}
                 </div>
 
-                {/* 系級 */}
+                {/* 系級/服務單位 */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    系級
+                    {isTeacher ? '服務單位' : '系所'}
                   </label>
                   <input
                     type="text"
                     value={formData.department}
                     onChange={(e) => handleChange('department', e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="例如：資訊工程學系"
+                    placeholder={isTeacher ? "例如：資訊工程學系" : "例如：資訊工程學系"}
                     disabled={isLoading}
                   />
                 </div>
@@ -409,15 +459,33 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
                 </button>
               </form>
             </>
-          ) : !successMessage && (
+          ) : registerMode === 'local' ? (
+            // 一般註冊表單
             <>
-              {/* 說明文字 */}
-              <p className="text-sm text-gray-600 mb-4 text-center">
-                請使用 Google 帳號註冊
+              <button
+                onClick={() => setRegisterMode('select')}
+                className="mb-4 text-sm text-blue-600 hover:text-blue-800 flex items-center"
+              >
+                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                返回選擇
+              </button>
+              <RegisterForm
+                onSuccess={handleLocalRegisterSuccess}
+                onError={handleLocalRegisterError}
+              />
+            </>
+          ) : !successMessage && (
+            // 選擇註冊方式
+            <>
+              <p className="text-sm text-gray-600 mb-6 text-center">
+                請選擇註冊方式
               </p>
 
-              {/* Google 登入按鈕 */}
+              {/* Google 註冊按鈕 */}
               <div className="mb-4">
+                <p className="text-xs text-gray-500 mb-2 text-center">推薦：使用 Google 帳號</p>
                 <div className="flex justify-center">
                   <GoogleLogin
                     onSuccess={handleGoogleSuccess}
@@ -428,13 +496,36 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
                     width="320"
                   />
                 </div>
+                <p className="text-xs text-gray-400 text-center mt-2">
+                  學生與教師皆可使用
+                </p>
                 {isLoading && (
                   <p className="text-center text-sm text-gray-500 mt-2">處理中...</p>
                 )}
               </div>
 
-              <p className="text-xs text-gray-400 text-center mt-4">
-                點擊 Google 註冊後，系統將引導您填寫個人資料
+              {/* 分隔線 */}
+              <div className="relative my-6">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-300"></div>
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="px-2 bg-white text-gray-500">或</span>
+                </div>
+              </div>
+
+              {/* 一般註冊按鈕 */}
+              <button
+                onClick={() => setRegisterMode('local')}
+                className="w-full py-3 px-4 rounded-lg font-medium text-gray-700 border-2 border-gray-300 hover:border-blue-500 hover:text-blue-600 transition-all flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                一般學生註冊
+              </button>
+              <p className="text-xs text-gray-400 text-center mt-2">
+                僅限學生，使用學號與密碼註冊
               </p>
             </>
           )}

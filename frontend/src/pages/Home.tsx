@@ -114,7 +114,9 @@ function Home() {
       const userData = {
         user_id: data.stu_id,
         full_name: data.stu_name,
-        role: 'student'
+        role: data.is_teacher ? 'teacher' : 'student',
+        identifier: data.stu_id,
+        email: ""
       };
 
       localStorage.setItem('user', JSON.stringify(userData));
