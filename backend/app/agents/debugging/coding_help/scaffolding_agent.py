@@ -199,7 +199,7 @@ async def generate_scaffold_response(
         
     except Exception as e:
         logger.error(f"Scaffold generation failed: {e}")
-        return "系統暫時無法生成引導，請稍後再試。"
+        return "系統無法生成引導，請修改程式碼再試一次。"
 
 
 async def run_scaffolding(

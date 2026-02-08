@@ -273,18 +273,25 @@ async def submit_code(
     }
 
     # ============================================================
-    # 統一使用 LangGraph 處理 (AC 和 Error 皆走 graph)
+    # LangGraph 處理邏輯 (Phase 8: 按需生成)
     # ============================================================
     
-    # 無論 AC 或 Error，都使用 app_graph 處理
-    # graph 會根據 is_correct 決定走哪條路
-    # 使用 AnalysisQueue 限制並發數量，避免 OpenAI Rate Limit
-    logger.info(f"Adding task to AnalysisQueue. is_correct={is_correct}")
-    await analysis_queue.add_task(
-        run_background_graph_task,
-        initial_state,
-        this_submission_num
-    )
+    # AC (Accepted): 自動觸發練習題生成 (因為學生通常會直接去做練習)
+    # Error: 不自動觸發診斷分析 (改為學生切換至「程式修正」分頁時才觸發)
+    if is_correct:
+        logger.info(f"AC detected. Adding practice generation task to AnalysisQueue.")
+        # 使用 task_id 防止重複與追蹤
+        task_id = f"{payload.student_id}_{payload.problem_id}_{this_submission_num}"
+        await analysis_queue.add_task(
+            run_background_graph_task,
+            initial_state,
+            this_submission_num,
+            task_id=task_id
+        )
+    else:
+        # Error 路徑：儲存 initial_state 供後續 init_coding_help 使用
+        # 實際 AI 分析將在使用者切換至「程式修正」分頁時才觸發
+        logger.info(f"Error detected. AI analysis will be triggered on-demand when user accesses coding help.")
 
     # ============================================================
     # Response
@@ -300,7 +307,7 @@ async def submit_code(
     if is_correct:
         response["message"] = "Accepted! Practice questions are being generated."
     else:
-        response["message"] = "Diagnosis is processing in background."
+        response["message"] = "Wrong Answer. Click 'Coding Help' for AI assistance."
 
     return response
 
@@ -491,13 +498,19 @@ def submit_practice_answer_endpoint(payload: PracticeSubmitListRequest):
 
 @router.post("/help/init")
 async def init_coding_help(payload: InitHelpRequest):
-    """初始化 CodingHelp，讀取對話紀錄 (支援 chat_log 新格式及舊格式)"""
+    """
+    初始化 CodingHelp (Phase 8: 按需生成)
+    - 若已有對話紀錄 -> 回傳 'resumed'
+    - 若無對話紀錄且無 evidence_report -> 觸發 AI 分析 -> 回傳 'started'
+    - 若無對話但有 evidence_report (分析中/尚未生成對話) -> 回傳 'pending'
+    """
     try:
         latest_num = get_submission_count(payload.student_id, payload.problem_id)
         if latest_num == 0:
              raise HTTPException(status_code=404, detail="No submission found.")
         
         with engine.connect() as conn:
+            # 1. 檢查是否已有對話紀錄
             check_stmt = select(dialogue_table).where(
                 dialogue_table.c.student_id == payload.student_id,
                 dialogue_table.c.problem_id == payload.problem_id,
@@ -529,10 +542,135 @@ async def init_coding_help(payload: InitHelpRequest):
                     "chat_log": chat_log
                 }
             
+            # 2. 檢查是否有 evidence_report
+            check_report_stmt = select(evidence_report_table).where(
+                evidence_report_table.c.student_id == payload.student_id,
+                evidence_report_table.c.problem_id == payload.problem_id,
+                evidence_report_table.c.num == latest_num
+            ).limit(1)
+            existing_report = conn.execute(check_report_stmt).fetchone()
+            
+            task_id = f"{payload.student_id}_{payload.problem_id}_{latest_num}"
+            
+            if existing_report:
+                # 有 report 但無 dialogue
+                # 關鍵修正：檢查任務是否正在執行中
+                if analysis_queue.is_processing(task_id):
+                    return {
+                        "status": "pending", 
+                        "message": "AI diagnosis is ready. Initializing chat..."
+                    }
+                else:
+                    # 有報告但沒有對話，且任務已結束 -> 視為失敗/中斷，重新觸發
+                    logger.warning(f"Report exists but no dialogue, and task {task_id} is not running. Re-triggering.")
+                    # Fall through to trigger logic below
+        
+        # 3. 無對話也無報告 (或任務中斷) -> 需要觸發 AI 分析 (On-Demand)
+        # task_id 已在上面定義
+        
+        logger.info(f"On-Demand Analysis Triggered for {payload.student_id} on {payload.problem_id}")
+        
+        # 取得最新提交的程式碼
+        latest_submission = get_latest_submission(payload.student_id, payload.problem_id)
+        if not latest_submission:
+            raise HTTPException(status_code=404, detail="Submission data not found.")
+        
+        # 解析程式碼
+        raw_code = latest_submission["code"]
+        if isinstance(raw_code, dict):
+            code_content = raw_code.get("content", "")
+        elif isinstance(raw_code, str):
+            try:
+                import json as json_module
+                code_json = json_module.loads(raw_code)
+                code_content = code_json.get("content", "")
+            except:
+                code_content = raw_code
+        else:
+            code_content = str(raw_code)
+        
+        # 準備錯誤訊息 (從 output 取得)
+        error_msg = ""
+        output_data = latest_submission.get("output", {})
+        if isinstance(output_data, dict):
+            results = output_data.get("results", [])
+            for r in results:
+                if r.get("status") != "AC":
+                    error_msg = (
+                        f"Input: {r.get('input', '')}\n"
+                        f"Actual: {r.get('actual', '')}\n"
+                        f"Expected: {r.get('expected', '')}\n"
+                        f"Error: {r.get('error', '')}"
+                    )
+                    break
+        
+        # 取得歷史報告
+        previous_reports = []
+        try:
+            with engine.connect() as conn2:
+                stmt = select(evidence_report_table.c.evidence_report).where(
+                    evidence_report_table.c.student_id == payload.student_id,
+                    evidence_report_table.c.problem_id == payload.problem_id
+                ).order_by(desc(evidence_report_table.c.submitted_at)).limit(3)
+                result = conn2.execute(stmt).fetchall()
+                previous_reports = [row[0] for row in result if row[0]]
+        except Exception as e:
+            logger.warning(f"Failed to fetch previous reports: {e}")
+        
+        # 取得題目資訊
+        problem_info = {}
+        try:
+            problem_info_raw = get_problem_by_id(payload.problem_id)
+            if problem_info_raw:
+                problem_info = {
+                    "title": problem_info_raw.get("title", ""),
+                    "description": problem_info_raw.get("description", ""),
+                    "input_description": problem_info_raw.get("input_description", ""),
+                    "output_description": problem_info_raw.get("output_description", "")
+                }
+        except Exception as e:
+            logger.warning(f"Failed to fetch problem info: {e}")
+        
+        # 建構 Graph State
+        initial_state = {
+            "student_id": payload.student_id,
+            "problem_id": payload.problem_id,
+            "current_code": code_content,
+            "error_message": error_msg,
+            "previous_reports": previous_reports,
+            "problem_info": problem_info,
+            "is_correct": False,  # 只有 Error 才會走到這裡
+            "evidence_report": {},
+            "search_query": "",
+            "retrieved_docs": [],
+            "zpd_level": 0,
+            "initial_response": "",
+            "practice_question": []
+        }
+        
+        # 加入分析佇列 (使用 task_id 去重)
+        task_id = f"{payload.student_id}_{payload.problem_id}_{latest_num}"
+        
+        added = await analysis_queue.add_task(
+            run_background_graph_task,
+            initial_state,
+            latest_num,
+            task_id=task_id
+        )
+        
+        if not added:
+            logger.info(f"Task {task_id} is already processing. Returning pending.")
             return {
-                "status": "pending", 
-                "message": "AI diagnosis is still processing. Please check back shortly."
+                "status": "pending",
+                "message": "AI diagnosis is already processing...",
+                "num": latest_num
             }
+        
+        return {
+            "status": "started",
+            "message": "AI analysis has been triggered. Please poll for results.",
+            "num": latest_num
+        }
 
     except Exception as e:
         logger.error(f"CodingHelp Init Error: {e}")

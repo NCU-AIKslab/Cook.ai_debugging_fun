@@ -47,13 +47,14 @@ submit_queue = SubmitQueue(max_workers=9)
 class AnalysisQueue:
     """
     AI 分析任務佇列：限制同時執行的 AI 分析任務數量，避免 OpenAI Rate Limit。
-    與 SubmitQueue 不同，此佇列使用 fire-and-forget 模式，不等待結果。
+    支援 Task ID 去重，防止重複觸發相同任務。
     """
     def __init__(self, max_workers=5):
         self.queue = asyncio.Queue()
         self.max_workers = max_workers
         self.running_workers = 0
         self._lock = asyncio.Lock()
+        self.processing_tasks = set() # 儲存正在處理中的 task_id
 
     async def start_workers(self):
         """啟動 worker tasks（應在應用程式啟動時呼叫一次）"""
@@ -71,27 +72,35 @@ class AnalysisQueue:
         logger = logging.getLogger(__name__)
         
         while True:
-            func, args, kwargs = await self.queue.get()
+            func, args, kwargs, task_id = await self.queue.get()
             try:
-                logger.info(f"AnalysisQueue Worker {worker_id} starting task...")
+                logger.info(f"AnalysisQueue Worker {worker_id} starting task [{task_id}]...")
                 await func(*args, **kwargs)
-                logger.info(f"AnalysisQueue Worker {worker_id} task completed.")
+                logger.info(f"AnalysisQueue Worker {worker_id} task [{task_id}] completed.")
             except Exception as e:
-                logger.error(f"AnalysisQueue Worker {worker_id} task failed: {e}")
+                logger.error(f"AnalysisQueue Worker {worker_id} task [{task_id}] failed: {e}")
             finally:
+                if task_id:
+                    self.processing_tasks.discard(task_id)
                 self.queue.task_done()
 
-    async def add_task(self, func, *args, **kwargs):
+    async def add_task(self, func, *args, task_id=None, **kwargs):
         """
         將任務加入佇列（fire-and-forget 模式）
-        
-        Args:
-            func: 要執行的 async 函數
-            *args: 位置參數
-            **kwargs: 關鍵字參數
+        若 task_id 已存在於 processing_tasks，則忽略此請求（去重）。
         """
-        # await self.start_workers()  # 確保 workers 已啟動
-        await self.queue.put((func, args, kwargs))
+        if task_id:
+            if task_id in self.processing_tasks:
+                # 任務已在佇列中或正在執行，忽略
+                return False
+            self.processing_tasks.add(task_id)
+        
+        await self.queue.put((func, args, kwargs, task_id))
+        return True
+
+    def is_processing(self, task_id):
+        """檢查特定任務是否正在處理中"""
+        return task_id in self.processing_tasks
 
 
 # 全域 AI 分析佇列實例

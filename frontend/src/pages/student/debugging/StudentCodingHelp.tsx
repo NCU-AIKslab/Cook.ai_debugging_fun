@@ -251,7 +251,7 @@ const StudentCodingHelp: React.FC = () => {
                 }
                 setIsChatLoading(false);
                 isPollingRef.current = false;
-            } else if (status === 'pending') {
+            } else if (status === 'pending' || status === 'started') {
                 setTimeout(() => pollForAnalysisResult(retryCount + 1), 2000);
             } else {
                 setIsChatLoading(false);
@@ -314,7 +314,7 @@ const StudentCodingHelp: React.FC = () => {
         }
     };
 
-    // 2. 切換 Tab
+    // 2. 切換 Tab (Phase 8: 按需生成)
     const handleTabChange = async (tab: 'editor' | 'chatbot' | 'practice') => {
         if (!selectedProblemId) return;
         if (tab === 'practice' && practiceStatus === 'locked') return;
@@ -324,28 +324,39 @@ const StudentCodingHelp: React.FC = () => {
         setActiveRightTab(tab);
 
         if (tab === 'chatbot' && (chatMessages.length === 0 || shouldRefreshChatRef.current)) {
-            // 若剛提交新程式，清空舊訊息並強制重新輪詢
+            // 若剛提交新程式，清空舊訊息
             if (shouldRefreshChatRef.current) {
                 setChatMessages([]);
                 shouldRefreshChatRef.current = false;
             }
             setIsChatLoading(true);
-            try {
-                const histRes = await axios.get(`${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`);
-                const chatLog = histRes.data.chat_log || [];
 
-                if (chatLog.length > 0) {
-                    // 使用新的 chat_log 格式
-                    const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
-                        role: msg.role as 'user' | 'agent',
-                        content: msg.content,
-                        zpd: msg.zpd,
-                        timestamp: msg.timestamp,
-                        type: msg.type
-                    }));
-                    setChatMessages(msgs);
+            try {
+                // Phase 8: 呼叫 init API 觸發按需分析
+                const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
+                    student_id: student.stu_id,
+                    problem_id: selectedProblemId
+                });
+
+                const { status, chat_log, reply } = initRes.data;
+
+                if (status === 'resumed') {
+                    // 已有對話紀錄 -> 直接顯示
+                    if (chat_log && chat_log.length > 0) {
+                        const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                            role: msg.role as 'user' | 'agent',
+                            content: msg.content,
+                            zpd: msg.zpd,
+                            timestamp: msg.timestamp,
+                            type: msg.type
+                        }));
+                        setChatMessages(msgs);
+                    } else if (reply) {
+                        setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                    }
                     setIsChatLoading(false);
-                } else {
+                } else if (status === 'started' || status === 'pending') {
+                    // 分析已觸發或處理中 -> 開始輪詢
                     if (!isAccepted) {
                         isPollingRef.current = true;
                         pollForAnalysisResult();
@@ -353,6 +364,10 @@ const StudentCodingHelp: React.FC = () => {
                         setChatMessages([{ role: 'agent', content: "恭喜您已通過此題！請前往「練習題」分頁進行練習", type: 'chat' }]);
                         setIsChatLoading(false);
                     }
+                } else {
+                    // 未知狀態
+                    setChatMessages([{ role: 'agent', content: "請先提交程式碼後，若有錯誤再進行詢問。", type: 'chat' }]);
+                    setIsChatLoading(false);
                 }
             } catch (error) {
                 setChatMessages([{ role: 'agent', content: "請先提交程式碼後，若有錯誤再進行詢問。", type: 'chat' }]);
@@ -569,9 +584,9 @@ const StudentCodingHelp: React.FC = () => {
 
                             <button
                                 onClick={() => handleTabChange('chatbot')}
-                                disabled={!isProblemSelected || !hasSubmission}
+                                disabled={!isProblemSelected || !hasSubmission || loading}
                                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center gap-2
-                                    ${!isProblemSelected || !hasSubmission
+                                    ${!isProblemSelected || !hasSubmission || loading
                                         ? 'border-transparent text-gray-300 cursor-not-allowed'
                                         : activeRightTab === 'chatbot'
                                             ? 'border-blue-500 text-blue-600'
