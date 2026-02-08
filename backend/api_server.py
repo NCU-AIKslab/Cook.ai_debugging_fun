@@ -4,7 +4,8 @@ from fastapi.responses import RedirectResponse
 
 # Import routers
 from backend.app.routers import auth_router
-from backend.app.routers import debugging 
+from backend.app.routers import debugging
+from backend.app.routers import dashboard 
 
 # --- FastAPI App ---
 
@@ -54,6 +55,9 @@ app.include_router(debugging.router)
 
 # Auth router (認證系統)
 app.include_router(auth_router.router)
+
+# Dashboard router (教師儀表板)
+app.include_router(dashboard.router)
 
 # To run this server:
 # 1. Make sure you are in the root directory of the project (Cook.ai).

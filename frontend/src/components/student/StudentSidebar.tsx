@@ -135,7 +135,7 @@ function StudentSidebar({ isSidebarOpen, onToggle }: StudentSidebarProps) {
                   <li>
                     <NavLink to="/student/pre-coding" className={navLinkClass}>
                       <span className={`whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'}`}>
-                        Pre-Coding
+                        Intention
                       </span>
                     </NavLink>
                   </li>

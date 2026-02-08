@@ -64,18 +64,27 @@ class PreCodingManager:
                 # Existing session
                 status_data = status_row._mapping if hasattr(status_row, "_mapping") else status_row
                 logs_data = logs_row._mapping if hasattr(logs_row, "_mapping") else logs_row
+                chat_log = logs_data["chat_log"] if logs_data else []
+                
+                # 從 chat_log 最後一則 agent 訊息取得 suggested_replies
+                suggested_replies = []
+                for msg in reversed(chat_log):
+                    if msg.get("role") == "agent":
+                        suggested_replies = msg.get("suggested_replies", [])
+                        break
                 
                 return {
                     "status": "existing",
                     "current_stage": status_data["current_stage"],
                     "current_score": status_data["current_score"],
                     "is_completed": status_data["is_completed"],
-                    "chat_log": logs_data["chat_log"] if logs_data else []
+                    "chat_log": chat_log,
+                    "suggested_replies": suggested_replies  # 新增：回傳建議回覆
                 }
             
             # Create new session
             problem_info = get_problem_by_id(problem_id) or {}
-            opening_msg = generate_opening_question(problem_info)
+            opening_msg, opening_suggestions = generate_opening_question(problem_info)
             
             now = datetime.now(timezone.utc)
             initial_log = [{
@@ -83,7 +92,8 @@ class PreCodingManager:
                 "content": opening_msg,
                 "stage": "UNDERSTANDING",
                 "score": 1,
-                "timestamp": now.isoformat()
+                "timestamp": now.isoformat(),
+                "suggested_replies": opening_suggestions  # 儲存建議回覆
             }]
             
             # Insert status record
@@ -210,13 +220,14 @@ class PreCodingManager:
         else:
             suggested_replies = []
         
-        # Append agent reply to log
+        # Append agent reply to log (含建議回覆)
         chat_log.append({
             "role": "agent",
             "content": agent_reply,
             "stage": new_stage,
             "score": new_score,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "suggested_replies": suggested_replies  # 與 agent 訊息一起儲存
         })
         
         # Update database
@@ -325,11 +336,20 @@ class PreCodingManager:
             )
             logs_row = conn.execute(logs_stmt).fetchone()
             logs_data = logs_row._mapping if logs_row else {}
+            chat_log = logs_data.get("chat_log", [])
+            
+            # 從 chat_log 最後一則 agent 訊息取得 suggested_replies
+            suggested_replies = []
+            for msg in reversed(chat_log):
+                if msg.get("role") == "agent":
+                    suggested_replies = msg.get("suggested_replies", [])
+                    break
             
             return {
                 "exists": True,
                 "current_stage": status_data["current_stage"],
                 "current_score": status_data["current_score"],
                 "is_completed": status_data["is_completed"],
-                "chat_log": logs_data.get("chat_log", [])
+                "chat_log": chat_log,
+                "suggested_replies": suggested_replies  # 新增：回傳建議回覆
             }

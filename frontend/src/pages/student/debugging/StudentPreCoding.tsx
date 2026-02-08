@@ -212,6 +212,10 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                 if (logicRes.data.status === 'success') {
                     const data = logicRes.data.data;
                     setLogicChatState(data);
+                    // 新增：從 API 回傳中初始化建議回覆
+                    if (data.suggested_replies && data.suggested_replies.length > 0) {
+                        setSuggestedReplies(data.suggested_replies);
+                    }
                     if (data.is_completed) {
                         setActiveTab('implementation');
                     }
@@ -428,14 +432,20 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     }) => {
         if (!pcData) return null;
 
-        const response = pcData.student_status[stage].find(r => r.q_id === question.id);
+        // 取得所有該題的作答紀錄
+        const allResponses = pcData.student_status[stage].filter(r => r.q_id === question.id);
+        // 最新的作答 (最終狀態)
+        const latestResponse = allResponses[allResponses.length - 1];
         const feedbackData = feedbackMap[question.id];
 
-        const isCorrect = response?.is_correct || false;
-        const selectedId = response?.selected_option_id;
+        const isCorrect = latestResponse?.is_correct || false;
+        const selectedId = latestResponse?.selected_option_id;
         const isSubmitting = submittingIds.has(question.id);
 
-        const showFeedback = response !== undefined;
+        const showFeedback = latestResponse !== undefined;
+
+        // 完成後找出正確答案的選項 ID (從 is_correct=true 的紀錄中取得)
+        const correctAnswerId = allResponses.find(r => r.is_correct)?.selected_option_id;
 
         return (
             <div className={`border rounded-xl p-5 mb-6 transition-all duration-300 ${isCorrect
@@ -466,11 +476,20 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                 <div className="space-y-2">
                     {question.options.map((opt) => {
                         const isSelected = selectedId === opt.id;
+                        const isLocked = pcData.is_completed || isCorrect;
+                        const isCorrectOption = correctAnswerId === opt.id; // 這是正確答案選項
                         let btnClass = "w-full text-left p-3 rounded-lg border transition-all duration-200 flex items-center text-sm ";
 
-                        if (isCorrect) {
-                            if (isSelected) btnClass += "bg-green-600 text-white border-green-600 font-medium";
-                            else btnClass += "bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed opacity-50";
+                        if (isLocked) {
+                            // 完成後狀態：正確答案選項顯示綠色，用戶選錯的顯示紅色
+                            if (isCorrectOption) {
+                                btnClass += "bg-green-600 text-white border-green-600 font-medium";
+                            } else if (isSelected && !isCorrect) {
+                                // 用戶選了但不是正確答案
+                                btnClass += "bg-red-300 text-white border-red-300 font-medium";
+                            } else {
+                                btnClass += "bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed opacity-50";
+                            }
                         } else if (isSelected) {
                             btnClass += "bg-red-500 text-white border-red-500";
                         } else {
@@ -480,11 +499,11 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                         return (
                             <button
                                 key={opt.id}
-                                disabled={isCorrect || isSubmitting}
+                                disabled={isLocked || isSubmitting}
                                 onClick={() => handleAnswerSubmit(stage, question.id, opt.id)}
                                 className={btnClass}
                             >
-                                <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-3 text-xs shrink-0 ${isCorrect && isSelected ? 'bg-white text-green-600 border-white' :
+                                <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-3 text-xs shrink-0 ${isLocked && isCorrectOption ? 'bg-white text-green-600 border-white' :
                                     isSelected && !isCorrect ? 'bg-white text-red-500 border-white' :
                                         'border-gray-400 text-gray-500'
                                     }`}>
@@ -666,6 +685,42 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                         <div className="flex flex-col h-full">
                                             {logicChatState ? (
                                                 <div className="flex flex-col h-full bg-white overflow-hidden">
+                                                    {/* Stage Indicator 階段指標 + 得分點點 */}
+                                                    {!logicChatState.is_completed && (
+                                                        <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-blue-50 to-purple-50 border-b border-gray-100">
+                                                            {/* 階段標籤 */}
+                                                            <div className="flex items-center gap-2">
+                                                                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${logicChatState.current_stage === 'UNDERSTANDING'
+                                                                    ? 'bg-blue-500 text-white shadow-sm'
+                                                                    : 'bg-green-100 text-green-700'
+                                                                    }`}>
+                                                                    <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80"></span>
+                                                                    理解問題
+                                                                </div>
+                                                                <div className="w-4 h-0.5 bg-gray-300 rounded-full"></div>
+                                                                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${logicChatState.current_stage === 'DECOMPOSITION'
+                                                                    ? 'bg-blue-500 text-white shadow-sm'
+                                                                    : 'bg-gray-100 text-gray-400'
+                                                                    }`}>
+                                                                    <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80"></span>
+                                                                    拆解問題
+                                                                </div>
+                                                            </div>
+                                                            {/* 進度點點 (1-4 分) */}
+                                                            <div className="flex items-center gap-1">
+                                                                <span className="text-xs text-gray-500 mr-1">進度:</span>
+                                                                {[1, 2, 3, 4].map((dot) => (
+                                                                    <div
+                                                                        key={dot}
+                                                                        className={`w-2.5 h-2.5 rounded-full transition-all ${dot <= logicChatState.current_score
+                                                                            ? 'bg-blue-500'
+                                                                            : 'bg-gray-200'
+                                                                            }`}
+                                                                    />
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                     {/* Chat Messages */}
                                                     <div
                                                         ref={chatContainerRef}
@@ -706,8 +761,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                                     {suggestedReplies.map((reply, idx) => (
                                                                         <button
                                                                             key={idx}
-                                                                            // 修改 1: 點擊後僅填入輸入框，不直接送出
-                                                                            onClick={() => setChatInput(reply)}
+                                                                            // 修改: 點擊後累加到輸入框，不覆蓋
+                                                                            onClick={() => setChatInput(prev => prev ? `${prev} ${reply}` : reply)}
                                                                             disabled={isSendingChat}
                                                                             className="px-3 py-1.5 text-sm bg-blue-50 text-blue-700 border border-blue-200 rounded-full hover:bg-blue-100 hover:border-blue-300 transition-colors disabled:opacity-50"
                                                                         >
@@ -817,6 +872,99 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                     </div>
                                                 )}
                                             </div>
+
+                                            {/* 完成後統計區塊 - 顯示首答紀錄與分數 */}
+                                            {pcData.is_completed && (
+                                                <div className="mb-8 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl shadow-sm">
+                                                    <h2 className="text-lg font-bold text-blue-800 mb-4 flex items-center">
+                                                        📊 作答紀錄與成績統計
+                                                    </h2>
+
+                                                    {/* 分數統計 */}
+                                                    {(() => {
+                                                        const explainResponses = pcData.student_status.explain_code || [];
+                                                        const errorResponses = pcData.student_status.error_code || [];
+                                                        const explainQuestions = pcData.question_data.explain_code_question || [];
+                                                        const errorQuestions = pcData.question_data.error_code_question || [];
+
+                                                        // 計算首答正確率 (只看每題第一筆)
+                                                        const getFirstAttemptResult = (responses: StudentResponse[], qId: string) => {
+                                                            return responses.find(r => r.q_id === qId);
+                                                        };
+
+                                                        const explainFirstCorrect = explainQuestions.filter(q => {
+                                                            const first = getFirstAttemptResult(explainResponses, q.id);
+                                                            return first?.is_correct;
+                                                        }).length;
+
+                                                        const errorFirstCorrect = errorQuestions.filter(q => {
+                                                            const first = getFirstAttemptResult(errorResponses, q.id);
+                                                            return first?.is_correct;
+                                                        }).length;
+
+                                                        const totalQuestions = explainQuestions.length + errorQuestions.length;
+                                                        const totalFirstCorrect = explainFirstCorrect + errorFirstCorrect;
+
+                                                        return (
+                                                            <>
+                                                                {/* 總分 */}
+                                                                <div className="mb-6 p-4 bg-white rounded-lg border border-blue-100 flex items-center justify-between">
+                                                                    <span className="text-gray-700 font-medium">🎯 首答正確題數</span>
+                                                                    <span className="text-2xl font-bold text-blue-600">
+                                                                        {totalFirstCorrect} / {totalQuestions}
+                                                                    </span>
+                                                                </div>
+
+                                                                {/* 程式碼解釋 - 首答紀錄 */}
+                                                                <div className="mb-4">
+                                                                    <h3 className="font-semibold text-gray-700 mb-2">📖 程式碼解釋 ({explainFirstCorrect}/{explainQuestions.length})</h3>
+                                                                    <div className="flex flex-wrap gap-2">
+                                                                        {explainQuestions.map((q, idx) => {
+                                                                            const first = getFirstAttemptResult(explainResponses, q.id);
+                                                                            const isCorrect = first?.is_correct || false;
+                                                                            const optionLetter = first ? String.fromCharCode(64 + first.selected_option_id) : '?';
+                                                                            return (
+                                                                                <div
+                                                                                    key={q.id}
+                                                                                    className={`px-3 py-1.5 rounded-lg text-sm font-medium ${isCorrect
+                                                                                        ? 'bg-green-100 text-green-700 border border-green-200'
+                                                                                        : 'bg-red-100 text-red-700 border border-red-200'
+                                                                                        }`}
+                                                                                >
+                                                                                    Q{idx + 1}: 選 {optionLetter} {isCorrect ? '✅' : '❌'}
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* 程式除錯 - 首答紀錄 */}
+                                                                <div>
+                                                                    <h3 className="font-semibold text-gray-700 mb-2">🐛 程式除錯 ({errorFirstCorrect}/{errorQuestions.length})</h3>
+                                                                    <div className="flex flex-wrap gap-2">
+                                                                        {errorQuestions.map((q, idx) => {
+                                                                            const first = getFirstAttemptResult(errorResponses, q.id);
+                                                                            const isCorrect = first?.is_correct || false;
+                                                                            const optionLetter = first ? String.fromCharCode(64 + first.selected_option_id) : '?';
+                                                                            return (
+                                                                                <div
+                                                                                    key={q.id}
+                                                                                    className={`px-3 py-1.5 rounded-lg text-sm font-medium ${isCorrect
+                                                                                        ? 'bg-green-100 text-green-700 border border-green-200'
+                                                                                        : 'bg-red-100 text-red-700 border border-red-200'
+                                                                                        }`}
+                                                                                >
+                                                                                    Q{idx + 1}: 選 {optionLetter} {isCorrect ? '✅' : '❌'}
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+                                                            </>
+                                                        );
+                                                    })()}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </>

@@ -184,22 +184,30 @@ def process_precoding_submission(
         feedback = selected_opt.get("feedback", "") if selected_opt else "Invalid option selected"
         explanation = answer_config.get("explanation", "")
 
-        # 7. 更新作答紀錄 (JSONB List)
+        # 7. 更新作答紀錄 (JSONB List) - 改為追加模式
         current_responses = list(a_data[response_column] or [])
         
-        # 移除舊的該題作答
-        current_responses = [r for r in current_responses if r.get("q_id") != question_id]
-        
-        # 加入新作答
+        # [變更] 不再移除舊的該題作答，改為追加新紀錄
+        # 加入新作答 (包含 timestamp)
         current_responses.append({
             "q_id": question_id,
             "selected_option_id": selected_option_id,
-            "is_correct": is_correct
+            "is_correct": is_correct,
+            "timestamp": datetime.now().isoformat()
         })
         
         # 8. 檢查該階段是否「全部完成」
+        # [變更] 使用每題的「最新」一筆作答來判斷是否正確
         all_q_ids = [q["id"] for q in target_questions]
-        correct_q_ids = [r["q_id"] for r in current_responses if r.get("is_correct") is True]
+        
+        # 找出每題的最新作答
+        latest_responses = {}
+        for r in current_responses:
+            qid = r.get("q_id")
+            if qid:
+                latest_responses[qid] = r  # 後面的會覆蓋前面的 (即最新)
+        
+        correct_q_ids = [qid for qid, r in latest_responses.items() if r.get("is_correct") is True]
         
         is_stage_cleared = all(qid in correct_q_ids for qid in all_q_ids)
         
