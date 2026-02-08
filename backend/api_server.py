@@ -7,6 +7,9 @@ from backend.app.routers import auth_router
 from backend.app.routers import debugging
 from backend.app.routers import dashboard 
 
+# Import queues for initialization
+from backend.app.agents.debugging.OJ.queue_manager import analysis_queue
+
 # --- FastAPI App ---
 
 # Create the FastAPI app
@@ -33,6 +36,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Startup Event: Initialize Background Queues ---
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initialize background task queues when the server starts.
+    This ensures AI analysis workers are ready to process tasks.
+    """
+    await analysis_queue.start_workers()
+    print(f"✅ AnalysisQueue initialized with {analysis_queue.max_workers} workers.")
 
 # --- Root, Health Check ---
 

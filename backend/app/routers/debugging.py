@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 # --- OJ & Core Imports ---
 from backend.app.agents.debugging.OJ.judge_core import run_judge, compute_verdict
-from backend.app.agents.debugging.OJ.queue_manager import submit_queue
+from backend.app.agents.debugging.OJ.queue_manager import submit_queue, analysis_queue
 from backend.app.agents.debugging.OJ.rate_limiter import rate_limiter
 from backend.app.agents.debugging.OJ.models import CodePayload
 from backend.app.agents.debugging.db import (
@@ -278,11 +278,12 @@ async def submit_code(
     
     # 無論 AC 或 Error，都使用 app_graph 處理
     # graph 會根據 is_correct 決定走哪條路
-    logger.info(f"Adding background GRAPH task. is_correct={is_correct}")
-    background_tasks.add_task(
+    # 使用 AnalysisQueue 限制並發數量，避免 OpenAI Rate Limit
+    logger.info(f"Adding task to AnalysisQueue. is_correct={is_correct}")
+    await analysis_queue.add_task(
         run_background_graph_task,
-        initial_state=initial_state,
-        submission_num=this_submission_num
+        initial_state,
+        this_submission_num
     )
 
     # ============================================================

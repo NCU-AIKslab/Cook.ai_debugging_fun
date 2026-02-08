@@ -42,8 +42,8 @@ class DocumentChunk(Base):
     embedding = Column(Vector(EMBEDDING_DIM), nullable=False)
 
 
-# 初始化 LLM
-llm = ChatOpenAI(model="gpt-5.1", temperature=0.3)
+# 初始化 LLM (增加逾時與重試設定以提升穩定性)
+llm = ChatOpenAI(model="gpt-5.1", temperature=0.3, request_timeout=120, max_retries=3)
 embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 
 

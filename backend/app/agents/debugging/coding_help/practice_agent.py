@@ -12,8 +12,8 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
-# 初始化 LLM
-llm = ChatOpenAI(model="gpt-5.1", temperature=0.2)
+# 初始化 LLM (增加逾時與重試設定以提升穩定性)
+llm = ChatOpenAI(model="gpt-5.1", temperature=0.2, request_timeout=120, max_retries=3)
 
 
 async def generate_practice_questions(

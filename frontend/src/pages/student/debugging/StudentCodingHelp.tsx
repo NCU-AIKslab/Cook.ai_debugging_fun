@@ -220,7 +220,7 @@ const StudentCodingHelp: React.FC = () => {
     // 輪詢函式 (保持不變)
     const pollForAnalysisResult = async (retryCount = 0) => {
         if (!isPollingRef.current) return;
-        if (retryCount > 20) {
+        if (retryCount > 60) {
             setIsChatLoading(false);
             setChatMessages(prev => [...prev, { role: 'agent', content: "AI 回應逾時，請重新整理或稍後再試。", type: 'chat' }]);
             isPollingRef.current = false;
