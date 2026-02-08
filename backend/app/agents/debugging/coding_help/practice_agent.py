@@ -13,7 +13,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 logger = logging.getLogger(__name__)
 
 # 初始化 LLM
-llm = ChatOpenAI(model="gpt-5.1", temperature=0.3)
+llm = ChatOpenAI(model="gpt-5.1", temperature=0.2)
 
 
 async def generate_practice_questions(
@@ -55,19 +55,18 @@ async def generate_practice_questions(
     misconceptions_text = json.dumps(misconceptions, ensure_ascii=False, indent=2)
     
     prompt = f"""
-    請根據學生之前的錯誤，設計 1 題「單選題」來鞏固觀念。
-    
+    你是程式教育專家。請分析學生的錯誤歷史，並針對其中「最關鍵的一個錯誤觀念」設計一題觀念辨析題。
+
     題目目標: {json.dumps(problem_info, ensure_ascii=False)}
-    
-    學生錯誤歷史 (請針對最常出現或最關鍵的誤解設計題目):
-    {misconceptions_text}
-    
-    【生成規範】:
-    1. 題目敘述請用自然語言，避免直接寫出 Python 語法（例如：不要寫「使用 split()」，改寫「將字串以空格拆分」）。
-    2. 需給出**完整程式碼**，並在填空處用 "_____" 表示。
-    3. 提供 3 個選項，正確答案隨機分佈。
-    4. 每個選項需包含 feedback (回饋)。
-    
+    學生錯誤歷史: {misconceptions_text}
+
+    【出題原則】：
+    1. **單一核心**：只針對一個具體的邏輯誤解。
+    2. **簡潔描述**：題目敘述不超過 60 字，直接切入核心矛盾。
+    3. **純文字選項**：選項內容必須是「自然語言邏輯描述」，禁止在選項中出現程式碼。
+    4. **排除模糊**：確保正確選項有唯一的邏輯標準，錯誤選項必須是學生常犯的邏輯陷阱。
+    5. **展示程式碼**：題目中可包含一段短小（10行內）的範例程式碼作為背景。
+
     格式規範 (JSON Array):
     [
         {{

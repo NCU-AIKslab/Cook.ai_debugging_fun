@@ -24,7 +24,7 @@ function Header({ paths }: HeaderProps) {
       <div className="flex items-center gap-6">
         {/* Cook.ai Logo */}
         <div className="text-2xl font-bold gradient-text">
-          Cook.ai
+          Cook.debugging
         </div>
 
         {/* Breadcrumb */}

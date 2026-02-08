@@ -99,6 +99,8 @@ const StudentCodingHelp: React.FC = () => {
     // 用來控制輪詢是否繼續的 Ref
     const isPollingRef = useRef(false);
     const isPracticePollingRef = useRef(false);
+    // 新增：標記是否剛提交新程式碼，需要強制更新分析結果
+    const shouldRefreshChatRef = useRef(false);
 
     const isProblemSelected = !!selectedProblemId;
 
@@ -321,7 +323,12 @@ const StudentCodingHelp: React.FC = () => {
 
         setActiveRightTab(tab);
 
-        if (tab === 'chatbot' && chatMessages.length === 0) {
+        if (tab === 'chatbot' && (chatMessages.length === 0 || shouldRefreshChatRef.current)) {
+            // 若剛提交新程式，清空舊訊息並強制重新輪詢
+            if (shouldRefreshChatRef.current) {
+                setChatMessages([]);
+                shouldRefreshChatRef.current = false;
+            }
             setIsChatLoading(true);
             try {
                 const histRes = await axios.get(`${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`);
@@ -410,6 +417,8 @@ const StudentCodingHelp: React.FC = () => {
             }
             setChatMessages([]);
             isPollingRef.current = false;
+            // 新增：標記需要強制更新分析結果
+            shouldRefreshChatRef.current = true;
 
         } catch (error: any) {
             console.error("Run code error:", error);
@@ -762,7 +771,7 @@ const StudentCodingHelp: React.FC = () => {
                                                                         )}
                                                                         {!isLocked && isSelected && !isCorrectOption && (
                                                                             <div className="mt-2 ml-8 p-3 bg-red-100 text-red-800 text-sm rounded animate-fadeIn">
-                                                                                <strong>❌ Incorrect.</strong> {opt.feedback}
+                                                                                {opt.feedback}
                                                                             </div>
                                                                         )}
                                                                     </div>
