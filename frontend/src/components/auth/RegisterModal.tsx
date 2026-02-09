@@ -27,7 +27,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   // 註冊模式
-  const [registerMode, setRegisterMode] = useState<RegisterMode>('select');
+  const [registerMode, setRegisterMode] = useState<RegisterMode>('local');
 
   // 註冊表單狀態
   const [showRegisterForm, setShowRegisterForm] = useState(false);
@@ -459,75 +459,11 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
                 </button>
               </form>
             </>
-          ) : registerMode === 'local' ? (
-            // 一般註冊表單
-            <>
-              <button
-                onClick={() => setRegisterMode('select')}
-                className="mb-4 text-sm text-blue-600 hover:text-blue-800 flex items-center"
-              >
-                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                返回選擇
-              </button>
-              <RegisterForm
-                onSuccess={handleLocalRegisterSuccess}
-                onError={handleLocalRegisterError}
-              />
-            </>
-          ) : !successMessage && (
-            // 選擇註冊方式
-            <>
-              <p className="text-sm text-gray-600 mb-6 text-center">
-                請選擇註冊方式
-              </p>
-
-              {/* Google 註冊按鈕 */}
-              <div className="mb-4">
-                <p className="text-xs text-gray-500 mb-2 text-center">推薦：使用 Google 帳號</p>
-                <div className="flex justify-center">
-                  <GoogleLogin
-                    onSuccess={handleGoogleSuccess}
-                    onError={handleGoogleError}
-                    text="signup_with"
-                    shape="rectangular"
-                    size="large"
-                    width="320"
-                  />
-                </div>
-                <p className="text-xs text-gray-400 text-center mt-2">
-                  學生與教師皆可使用
-                </p>
-                {isLoading && (
-                  <p className="text-center text-sm text-gray-500 mt-2">處理中...</p>
-                )}
-              </div>
-
-              {/* 分隔線 */}
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-300"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-white text-gray-500">或</span>
-                </div>
-              </div>
-
-              {/* 一般註冊按鈕 */}
-              <button
-                onClick={() => setRegisterMode('local')}
-                className="w-full py-3 px-4 rounded-lg font-medium text-gray-700 border-2 border-gray-300 hover:border-blue-500 hover:text-blue-600 transition-all flex items-center justify-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-                一般學生註冊
-              </button>
-              <p className="text-xs text-gray-400 text-center mt-2">
-                僅限學生，使用學號與密碼註冊
-              </p>
-            </>
+          ) : (
+            <RegisterForm
+              onSuccess={handleLocalRegisterSuccess}
+              onError={handleLocalRegisterError}
+            />
           )}
         </div>
 

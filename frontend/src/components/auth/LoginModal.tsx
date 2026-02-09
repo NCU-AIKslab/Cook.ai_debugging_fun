@@ -263,30 +263,6 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
                         </div>
                     )}
 
-                    {/* Google 登入按鈕 */}
-                    <div className="mb-6">
-                        <div className="flex justify-center">
-                            <GoogleLogin
-                                onSuccess={handleGoogleSuccess}
-                                onError={handleGoogleError}
-                                text="signin_with"
-                                shape="rectangular"
-                                size="large"
-                                width="320"
-                            />
-                        </div>
-                    </div>
-
-                    {/* 分隔線 */}
-                    <div className="relative my-6">
-                        <div className="absolute inset-0 flex items-center">
-                            <div className="w-full border-t border-gray-300"></div>
-                        </div>
-                        <div className="relative flex justify-center text-sm">
-                            <span className="px-2 bg-white text-gray-500">或使用學號登入</span>
-                        </div>
-                    </div>
-
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -323,19 +299,43 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
                             idleText={isLoading ? '登入中...' : '登入'}
                         />
                     </form>
+
+                    <div className="mt-4 mb-2 text-center">
+                        <p className="text-sm text-gray-600">
+                            還沒有帳號？{' '}
+                            <button
+                                onClick={handleClose}
+                                className="text-blue-600 hover:text-blue-800 font-medium"
+                            >
+                                立即註冊
+                            </button>
+                        </p>
+                    </div>
+
+                    {/* 分隔線 */}
+                    <div className="flex items-center gap-4 my-6">
+                        <div className="h-px bg-gray-300 flex-1"></div>
+                        <span className="text-gray-500 text-sm">or</span>
+                        <div className="h-px bg-gray-300 flex-1"></div>
+                    </div>
+
+                    {/* Google 登入按鈕 */}
+                    <div className="mb-6">
+                        <div className="flex justify-center">
+                            <GoogleLogin
+                                onSuccess={handleGoogleSuccess}
+                                onError={handleGoogleError}
+                                text="continue_with"
+                                shape="rectangular"
+                                size="large"
+                                width="320"
+                            />
+                        </div>
+                    </div>
                 </div>
 
                 {/* Footer */}
                 <div className="p-6 border-t border-gray-200 bg-gray-50 rounded-b-lg">
-                    <p className="text-sm text-gray-600 text-center">
-                        還沒有帳號？{' '}
-                        <button
-                            onClick={handleClose}
-                            className="text-blue-600 hover:text-blue-800 font-medium"
-                        >
-                            立即註冊
-                        </button>
-                    </p>
                 </div>
             </div>
         </div>

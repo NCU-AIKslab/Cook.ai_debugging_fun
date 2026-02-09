@@ -8,6 +8,16 @@ import RegisterModal from '../components/auth/RegisterModal';
 import API_BASE_URL from '../config/api';
 
 
+// ... existing imports
+import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
+import GoogleRegisterModal from '../components/auth/GoogleRegisterModal';
+
+interface GoogleUserInfo {
+  email: string;
+  name: string;
+  picture: string;
+}
+
 function Home() {
   const navigate = useNavigate();
   const { setUser } = useUser();
@@ -18,7 +28,13 @@ function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
 
+  // Google 註冊 Modal 狀態
+  const [showGoogleRegister, setShowGoogleRegister] = useState(false);
+  const [googleUserInfo, setGoogleUserInfo] = useState<GoogleUserInfo | null>(null);
+  const [pendingGoogleToken, setPendingGoogleToken] = useState<string | null>(null);
+
   const features = [
+    // ... feature items
     {
       title: 'AI 助教',
       description: '智慧生成教材與題目，協助自動批改，加快工作效率',
@@ -123,13 +139,117 @@ function Home() {
       setUser(userData);
 
       // 導向學生頁面
-      navigate('/student');
+      navigate(data.is_teacher ? '/teacher' : '/student');
     } catch (err: any) {
       setError(err.message || '登入失敗，請檢查您的學號密碼');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Google 登入成功
+  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
+    setError('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: credentialResponse.credential })
+      });
+
+      const data = await response.json();
+
+      // 處理 404 USER_NOT_FOUND - 需要先註冊
+      if (response.status === 404 && data.code === 'USER_NOT_FOUND') {
+        // 保存 Google 使用者資訊並開啟註冊 Modal
+        setGoogleUserInfo({
+          email: data.google_user?.email || '',
+          name: data.google_user?.name || '',
+          picture: data.google_user?.picture || ''
+        });
+        setPendingGoogleToken(credentialResponse.credential || null);
+        setShowGoogleRegister(true);
+        setIsLoading(false);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Google 登入失敗');
+      }
+
+      // 登入成功
+      const userData = {
+        user_id: data.identifier, // Use identifier (student ID/name) as user_id
+        full_name: data.full_name,
+        role: data.is_teacher ? 'teacher' : 'student',
+        access_token: data.access_token,
+        email: data.email,
+        identifier: data.identifier,
+        department: data.department
+      };
+
+      localStorage.setItem('user', JSON.stringify(userData));
+      setUser(userData);
+
+      // 根據角色導向不同頁面
+      navigate(data.is_teacher ? '/teacher' : '/student');
+    } catch (err: any) {
+      setError(err.message || 'Google 登入失敗');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Google 登入失敗
+  const handleGoogleError = () => {
+    setError('Google 登入失敗，請稍後再試');
+  };
+
+  // 註冊成功後自動登入
+  const handleRegisterSuccess = async () => {
+    setShowGoogleRegister(false);
+
+    // 註冊成功後，嘗試再次 Google 登入
+    if (pendingGoogleToken) {
+      setIsLoading(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: pendingGoogleToken })
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.detail || '登入失敗');
+        }
+
+        const data = await response.json();
+
+        const userData = {
+          user_id: data.identifier, // Use identifier (student ID/name) as user_id
+          full_name: data.full_name,
+          role: data.is_teacher ? 'teacher' : 'student',
+          access_token: data.access_token,
+          email: data.email,
+          identifier: data.identifier,
+          department: data.department
+        };
+
+        localStorage.setItem('user', JSON.stringify(userData));
+        setUser(userData);
+        navigate(data.is_teacher ? '/teacher' : '/student');
+      } catch (err: any) {
+        setError(err.message || '登入失敗，請重新點擊 Google 登入');
+      } finally {
+        setIsLoading(false);
+        setPendingGoogleToken(null);
+      }
+    }
+  };
+
 
   return (
     <div className="flex flex-col h-screen">
@@ -285,7 +405,7 @@ function Home() {
               </button>
             </form>
 
-            <div className="mt-6 text-center">
+            <div className="mt-4 mb-2 text-center">
               <p className="text-sm text-gray-400">
                 還沒有帳號？{' '}
                 <button
@@ -296,6 +416,28 @@ function Home() {
                 </button>
               </p>
             </div>
+
+            <div className="flex items-center gap-4 my-6">
+              <div className="h-px bg-gray-600 flex-1"></div>
+              <span className="text-gray-400 text-sm">or</span>
+              <div className="h-px bg-gray-600 flex-1"></div>
+            </div>
+
+            <div className="mb-6">
+              <div className="flex justify-center">
+                <GoogleLogin
+                  onSuccess={handleGoogleSuccess}
+                  onError={handleGoogleError}
+                  text="continue_with"
+                  shape="rectangular"
+                  size="large"
+                  width="320"
+                  theme="filled_black"
+                />
+              </div>
+            </div>
+
+
           </div>
         </div>
       </div>
@@ -309,6 +451,19 @@ function Home() {
         onClose={() => setIsRegisterModalOpen(false)}
       />
 
+      {/* Google Register Modal */}
+      {showGoogleRegister && googleUserInfo && (
+        <GoogleRegisterModal
+          isOpen={showGoogleRegister}
+          onClose={() => {
+            setShowGoogleRegister(false);
+            setGoogleUserInfo(null);
+            setPendingGoogleToken(null);
+          }}
+          googleUser={googleUserInfo}
+          onSuccess={handleRegisterSuccess}
+        />
+      )}
       <style>{`
 @keyframes gradient {
   0 % { background- position: 0 % 50 %;
