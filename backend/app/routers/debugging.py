@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends, BackgroundTa
 from typing import Optional, List, Dict, Any
 import json, re
 import logging
-from sqlalchemy import select, desc, insert, update, text
+from sqlalchemy import select, desc, insert, update, text, asc, func
 from pydantic import BaseModel
 
 # --- OJ & Core Imports ---
@@ -20,7 +20,8 @@ from backend.app.agents.debugging.db import (
     engine,                 
     dialogue_table,         
     evidence_report_table,  
-    practice_table          
+    practice_table,
+    submission_table          
 )
 
 from backend.app.agents.debugging.oj_models import get_problems_by_chapter, get_problem_by_id
@@ -56,14 +57,12 @@ class PreCodingSubmitRequest(BaseModel):
     question_id: str         
     selected_option_id: int  
 
-class InitHelpRequest(BaseModel):
-    student_id: str
-    problem_id: str
 
 class ChatRequest(BaseModel):
     student_id: str
     problem_id: str
     message: str
+    submission_num: Optional[int] = None  # V3: Track which submission this chat belongs to
 
 class PracticeAnswerItem(BaseModel):
     q_id: str
@@ -411,6 +410,23 @@ def get_student_code_endpoint(student_id: str, problem_id: str):
 
         practice_info = get_practice_status(student_id, problem_id)
 
+        # Calculate submission_num for frontend
+        sub_num = get_submission_count(student_id, problem_id)
+
+        # Calculate latest_report_num for frontend (V3)
+        latest_report_num = 0
+        try:
+            with engine.connect() as conn:
+                stmt = select(func.max(evidence_report_table.c.num)).where(
+                    evidence_report_table.c.student_id == student_id,
+                    evidence_report_table.c.problem_id == problem_id
+                )
+                row = conn.execute(stmt).fetchone()
+                if row and row[0]:
+                    latest_report_num = row[0]
+        except Exception as e:
+            logger.warning(f"Failed to get latest report num: {e}")
+
         return {
             "status": "success",
             "data": {
@@ -418,7 +434,9 @@ def get_student_code_endpoint(student_id: str, problem_id: str):
                 "result": result_display, 
                 "is_accepted": is_accepted,
                 "practice": practice_info,
-                "submitted_at": submission["submitted_at"] if submission else None
+                "submitted_at": submission["submitted_at"] if submission else None,
+                "submission_num": sub_num,
+                "latest_report_num": latest_report_num
             }
         }
 
@@ -496,87 +514,136 @@ def submit_practice_answer_endpoint(payload: PracticeSubmitListRequest):
         logger.error(f"Practice Submit Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class InitHelpRequest(BaseModel):
+    student_id: str
+    problem_id: str
+    force_refresh: Optional[bool] = False
+    submission_num: Optional[int] = None # V3: Snapshot Analysis
+
 @router.post("/help/init")
 async def init_coding_help(payload: InitHelpRequest):
     """
     初始化 CodingHelp (Phase 8: 按需生成)
-    - 若已有對話紀錄 -> 回傳 'resumed'
-    - 若無對話紀錄且無 evidence_report -> 觸發 AI 分析 -> 回傳 'started'
-    - 若無對話但有 evidence_report (分析中/尚未生成對話) -> 回傳 'pending'
+    - 可指定 submission_num 進行 Snapshot Analysis
     """
     try:
-        latest_num = get_submission_count(payload.student_id, payload.problem_id)
-        if latest_num == 0:
+        latest_count = get_submission_count(payload.student_id, payload.problem_id)
+        if latest_count == 0:
              raise HTTPException(status_code=404, detail="No submission found.")
+             
+        # Determine Target Num
+        target_num = payload.submission_num
+        if target_num is None or target_num == 0:
+            target_num = latest_count
         
+        # Ensure target doesn't exceed latest
+        if target_num > latest_count:
+             target_num = latest_count
+
+        logger.info(f"Init Coding Help for {payload.student_id} on {payload.problem_id}, Target Num: {target_num} (Latest: {latest_count})")
+
         with engine.connect() as conn:
-            # 1. 檢查是否已有對話紀錄
-            check_stmt = select(dialogue_table).where(
-                dialogue_table.c.student_id == payload.student_id,
-                dialogue_table.c.problem_id == payload.problem_id,
-                dialogue_table.c.num == latest_num
-            ).limit(1)
-            existing_dialogue = conn.execute(check_stmt).fetchone()
+            # Force Refresh: Clear old data for TARGET num
+            if payload.force_refresh:
+                logger.info(f"Force Refresh detected for {payload.student_id} on {payload.problem_id} (Sub#{target_num}). Clearing old data.")
+                with engine.begin() as trans_conn:
+                     trans_conn.execute(dialogue_table.delete().where(
+                         dialogue_table.c.student_id == payload.student_id,
+                         dialogue_table.c.problem_id == payload.problem_id,
+                         dialogue_table.c.num == target_num
+                     ))
+                     trans_conn.execute(evidence_report_table.delete().where(
+                         evidence_report_table.c.student_id == payload.student_id,
+                         evidence_report_table.c.problem_id == payload.problem_id,
+                         evidence_report_table.c.num == target_num
+                     ))
             
-            if existing_dialogue:
-                mapping = existing_dialogue._mapping
-                chat_log = mapping.get("chat_log") or []
+            # 1. 檢查是否已有對話紀錄 (Target Num)
+            if not payload.force_refresh:
+                check_stmt = select(dialogue_table).where(
+                    dialogue_table.c.student_id == payload.student_id,
+                    dialogue_table.c.problem_id == payload.problem_id,
+                    dialogue_table.c.num == target_num
+                ).limit(1)
+                existing_dialogue = conn.execute(check_stmt).fetchone()
                 
-                # 從 chat_log 讀取最後一則 agent 訊息作為初始回覆
-                initial_reply = ""
-                zpd_level = 1
-                
-                if chat_log:
-                    # 尋找最後一則 agent 回覆
-                    for msg in reversed(chat_log):
-                        if msg.get("role") == "agent":
-                            initial_reply = msg.get("content", "")
-                            zpd_level = msg.get("zpd", 1)
-                            break
-                
-                return {
-                    "status": "resumed",
-                    "reply": initial_reply,
-                    "zpd_level": zpd_level,
-                    "num": latest_num,
-                    "chat_log": chat_log
-                }
+                if existing_dialogue:
+                    mapping = existing_dialogue._mapping
+                    chat_log = mapping.get("chat_log") or []
+                    
+                    initial_reply = ""
+                    zpd_level = 1
+                    
+                    if chat_log:
+                        for msg in reversed(chat_log):
+                            if msg.get("role") == "agent":
+                                initial_reply = msg.get("content", "")
+                                zpd_level = msg.get("zpd", 1)
+                                break
+                    
+                    return {
+                        "status": "resumed",
+                        "reply": initial_reply,
+                        "zpd_level": zpd_level,
+                        "num": target_num,
+                        "chat_log": chat_log
+                    }
             
-            # 2. 檢查是否有 evidence_report
+            # 2. 檢查 Evidence Report (Target Num)
             check_report_stmt = select(evidence_report_table).where(
                 evidence_report_table.c.student_id == payload.student_id,
                 evidence_report_table.c.problem_id == payload.problem_id,
-                evidence_report_table.c.num == latest_num
+                evidence_report_table.c.num == target_num
             ).limit(1)
             existing_report = conn.execute(check_report_stmt).fetchone()
             
-            task_id = f"{payload.student_id}_{payload.problem_id}_{latest_num}"
+            task_id = f"{payload.student_id}_{payload.problem_id}_{target_num}"
             
             if existing_report:
-                # 有 report 但無 dialogue
-                # 關鍵修正：檢查任務是否正在執行中
                 if analysis_queue.is_processing(task_id):
                     return {
                         "status": "pending", 
-                        "message": "AI diagnosis is ready. Initializing chat..."
+                        "message": "AI diagnosis is ready. Initializing chat...",
+                        "num": target_num
                     }
                 else:
-                    # 有報告但沒有對話，且任務已結束 -> 視為失敗/中斷，重新觸發
                     logger.warning(f"Report exists but no dialogue, and task {task_id} is not running. Re-triggering.")
-                    # Fall through to trigger logic below
         
-        # 3. 無對話也無報告 (或任務中斷) -> 需要觸發 AI 分析 (On-Demand)
-        # task_id 已在上面定義
+        # 3. Trigger Analysis for TARGET Submission
+        logger.info(f"On-Demand Analysis Triggered for {payload.student_id} on {payload.problem_id} (Num#{target_num})")
         
-        logger.info(f"On-Demand Analysis Triggered for {payload.student_id} on {payload.problem_id}")
+        # query specific submission by offset
+        # num 1 is offset 0
+        offset_val = target_num - 1
+        logger.info(f"Fetching submission with offset {offset_val} (TargetNum: {target_num})")
         
-        # 取得最新提交的程式碼
-        latest_submission = get_latest_submission(payload.student_id, payload.problem_id)
-        if not latest_submission:
-            raise HTTPException(status_code=404, detail="Submission data not found.")
+        stmt_sub = select(submission_table).where(
+            submission_table.c.student_id == payload.student_id,
+            submission_table.c.problem_id == payload.problem_id
+        ).order_by(asc(submission_table.c.submitted_at)).offset(offset_val).limit(1)
+
+        with engine.connect() as conn:
+             submission_row = conn.execute(stmt_sub).fetchone()
         
-        # 解析程式碼
-        raw_code = latest_submission["code"]
+        target_submission = None
+        if submission_row:
+             mapping = submission_row._mapping
+             target_submission = {
+                 "code": mapping["code"],
+                 "output": mapping["output"],
+                 "submitted_at": mapping["submitted_at"]
+             }
+             logger.info(f"Snapshot Submission Found: Time={mapping['submitted_at']}")
+        else:
+             # Fallback
+             logger.warning(f"Submission #{target_num} not found via offset {offset_val}. Falling back to latest.")
+             target_submission = get_latest_submission(payload.student_id, payload.problem_id)
+
+        if not target_submission:
+             raise HTTPException(status_code=404, detail="Submission data not found.")
+        
+        # Parse Code
+        raw_code = target_submission["code"]
         if isinstance(raw_code, dict):
             code_content = raw_code.get("content", "")
         elif isinstance(raw_code, str):
@@ -588,13 +655,15 @@ async def init_coding_help(payload: InitHelpRequest):
                 code_content = raw_code
         else:
             code_content = str(raw_code)
+            
+        logger.info(f"Snapshot Code Preview (First 50 chars): {code_content[:50]}...")
         
-        # 準備錯誤訊息 (從 output 取得)
+        # Error Msg
         error_msg = ""
-        output_data = latest_submission.get("output", {})
+        output_data = target_submission.get("output", {})
         if isinstance(output_data, dict):
-            results = output_data.get("results", [])
-            for r in results:
+            results_list = output_data.get("results", [])
+            for r in results_list:
                 if r.get("status") != "AC":
                     error_msg = (
                         f"Input: {r.get('input', '')}\n"
@@ -604,7 +673,7 @@ async def init_coding_help(payload: InitHelpRequest):
                     )
                     break
         
-        # 取得歷史報告
+        # Previous Reports (Context)
         previous_reports = []
         try:
             with engine.connect() as conn2:
@@ -617,7 +686,6 @@ async def init_coding_help(payload: InitHelpRequest):
         except Exception as e:
             logger.warning(f"Failed to fetch previous reports: {e}")
         
-        # 取得題目資訊
         problem_info = {}
         try:
             problem_info_raw = get_problem_by_id(payload.problem_id)
@@ -631,7 +699,6 @@ async def init_coding_help(payload: InitHelpRequest):
         except Exception as e:
             logger.warning(f"Failed to fetch problem info: {e}")
         
-        # 建構 Graph State
         initial_state = {
             "student_id": payload.student_id,
             "problem_id": payload.problem_id,
@@ -639,7 +706,7 @@ async def init_coding_help(payload: InitHelpRequest):
             "error_message": error_msg,
             "previous_reports": previous_reports,
             "problem_info": problem_info,
-            "is_correct": False,  # 只有 Error 才會走到這裡
+            "is_correct": False,
             "evidence_report": {},
             "search_query": "",
             "retrieved_docs": [],
@@ -648,13 +715,12 @@ async def init_coding_help(payload: InitHelpRequest):
             "practice_question": []
         }
         
-        # 加入分析佇列 (使用 task_id 去重)
-        task_id = f"{payload.student_id}_{payload.problem_id}_{latest_num}"
+        task_id = f"{payload.student_id}_{payload.problem_id}_{target_num}"
         
         added = await analysis_queue.add_task(
             run_background_graph_task,
             initial_state,
-            latest_num,
+            target_num,
             task_id=task_id
         )
         
@@ -663,13 +729,13 @@ async def init_coding_help(payload: InitHelpRequest):
             return {
                 "status": "pending",
                 "message": "AI diagnosis is already processing...",
-                "num": latest_num
+                "num": target_num
             }
         
         return {
             "status": "started",
             "message": "AI analysis has been triggered. Please poll for results.",
-            "num": latest_num
+            "num": target_num
         }
 
     except Exception as e:
@@ -684,13 +750,16 @@ async def chat_with_agent(payload: ChatRequest):
     """
     try:
         latest_num = get_submission_count(payload.student_id, payload.problem_id)
+        # V3: Use submission_num from request if provided, else fall back to latest_num
+        target_num = payload.submission_num if (payload.submission_num is not None and payload.submission_num > 0) else latest_num
+        logger.info(f"Chat for {payload.student_id} on {payload.problem_id}, using num={target_num} (latest={latest_num})")
         
         with engine.connect() as conn:
-            # 1. 取得 evidence report
+            # 1. 取得 evidence report (for TARGET num)
             stmt_rep = select(evidence_report_table).where(
                 evidence_report_table.c.student_id == payload.student_id,
                 evidence_report_table.c.problem_id == payload.problem_id,
-                evidence_report_table.c.num == latest_num
+                evidence_report_table.c.num == target_num
             )
             report_row = conn.execute(stmt_rep).fetchone()
             
@@ -698,11 +767,11 @@ async def chat_with_agent(payload: ChatRequest):
             if report_row:
                 context_report = report_row._mapping["evidence_report"]
             
-            # 2. 取得現有對話紀錄
+            # 2. 取得現有對話紀錄 (for TARGET num)
             stmt_dial = select(dialogue_table).where(
                 dialogue_table.c.student_id == payload.student_id,
                 dialogue_table.c.problem_id == payload.problem_id,
-                dialogue_table.c.num == latest_num
+                dialogue_table.c.num == target_num
             ).limit(1)
             dialogue_row = conn.execute(stmt_dial).fetchone()
             
@@ -761,12 +830,12 @@ async def chat_with_agent(payload: ChatRequest):
                     )
                 )
         else:
-            # 新增記錄 (如果不存在)
+            # 新增記錄 (如果不存在) - use target_num, not latest_num
             with engine.begin() as conn:
                 conn.execute(insert(dialogue_table).values(
                     student_id=payload.student_id,
                     problem_id=payload.problem_id,
-                    num=latest_num,
+                    num=target_num,
                     chat_log=updated_chat_log
                 ))
 
@@ -781,20 +850,46 @@ async def chat_with_agent(payload: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/help/history/{student_id}/{problem_id}")
-def get_history_endpoint(student_id: str, problem_id: str):
+def get_history_endpoint(
+    student_id: str, 
+    problem_id: str,
+    submission_num: Optional[int] = Query(None, description="Target submission number")
+):
     """取得對話歷史 (僅使用 chat_log 格式)"""
     try:
         latest_num = get_submission_count(student_id, problem_id)
         if latest_num == 0:
             return {"chat_log": []}
 
+        # V3: Use submission_num if provided, else latest
+        target_num = submission_num if (submission_num is not None and submission_num > 0) else latest_num
+
         with engine.connect() as conn:
             stmt = select(dialogue_table).where(
                 dialogue_table.c.student_id == student_id,
                 dialogue_table.c.problem_id == problem_id,
-                dialogue_table.c.num == latest_num 
+                dialogue_table.c.num == target_num 
             ).order_by(dialogue_table.c.id.asc())
             rows = conn.execute(stmt).fetchall()
+            
+            # V3 Fallback: If no dialogue found for target_num, get the latest available
+            if not rows:
+                logger.info(f"No dialogue found for num={target_num}, falling back to latest available")
+                # Find the latest num that has dialogue
+                max_num_stmt = select(func.max(dialogue_table.c.num)).where(
+                    dialogue_table.c.student_id == student_id,
+                    dialogue_table.c.problem_id == problem_id,
+                )
+                max_row = conn.execute(max_num_stmt).fetchone()
+                if max_row and max_row[0]:
+                    fallback_num = max_row[0]
+                    logger.info(f"Found latest dialogue at num={fallback_num}")
+                    stmt_fallback = select(dialogue_table).where(
+                        dialogue_table.c.student_id == student_id,
+                        dialogue_table.c.problem_id == problem_id,
+                        dialogue_table.c.num == fallback_num,
+                    ).order_by(dialogue_table.c.id.asc())
+                    rows = conn.execute(stmt_fallback).fetchall()
         
         # 回傳 chat_log 格式
         all_chat_log = []

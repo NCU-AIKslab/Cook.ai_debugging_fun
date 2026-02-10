@@ -99,8 +99,13 @@ const StudentCodingHelp: React.FC = () => {
     // 用來控制輪詢是否繼續的 Ref
     const isPollingRef = useRef(false);
     const isPracticePollingRef = useRef(false);
-    // 新增：標記是否剛提交新程式碼，需要強制更新分析結果
-    const shouldRefreshChatRef = useRef(false);
+
+    const [canRequestHelp, setCanRequestHelp] = useState(false);
+
+    // V2 State: Track submission version
+    const [latestSubmissionNum, setLatestSubmissionNum] = useState<number>(0);
+    // V3: Track which submission the current help session belongs to
+    const [activeHelpNum, setActiveHelpNum] = useState<number>(0);
 
     const isProblemSelected = !!selectedProblemId;
 
@@ -151,6 +156,7 @@ const StudentCodingHelp: React.FC = () => {
             setResult(null);
             setIsAccepted(false);
             setHasSubmission(false);  // 重置提交狀態
+            setCanRequestHelp(false); // Reset help availability
 
             // 重置 Practice State
             setPracticeStatus('locked');
@@ -160,7 +166,8 @@ const StudentCodingHelp: React.FC = () => {
             setFeedbackMap({});
 
             setChatMessages([]);
-            setActiveRightTab('editor');
+            setActiveRightTab('editor'); // V3: Reset to editor tab on problem change
+
             isPollingRef.current = false;
 
             try {
@@ -174,9 +181,22 @@ const StudentCodingHelp: React.FC = () => {
                     setStudentCode(data.code || "");
                     setResult(data.result);
                     setIsAccepted(data.is_accepted);
-                    // 若有既存結果，表示曾經提交過
+
+                    // V2: Update State
+                    setLatestSubmissionNum(data.submission_num || 0);
+
                     if (data.result) {
                         setHasSubmission(true);
+
+                        // V3 Logic: Enable help button if not accepted and has a submission
+                        if (!data.is_accepted && data.submission_num > 0) {
+                            // Check if this submission already has a report
+                            const subNum = data.submission_num || 0;
+                            const repNum = data.latest_report_num || 0;
+                            setCanRequestHelp(subNum > repNum);
+                        } else {
+                            setCanRequestHelp(false);
+                        }
                     }
 
                     const pInfo = data.practice;
@@ -217,20 +237,24 @@ const StudentCodingHelp: React.FC = () => {
         fetchData();
     }, [selectedProblemId, student.stu_id]);
 
-    // 輪詢函式 (保持不變)
-    const pollForAnalysisResult = async (retryCount = 0) => {
+    // 輪詢函式 (Modified: Accept targetNum for snapshot polling)
+    const pollForAnalysisResult = async (targetNum: number, retryCount = 0) => {
         if (!isPollingRef.current) return;
         if (retryCount > 60) {
             setIsChatLoading(false);
             setChatMessages(prev => [...prev, { role: 'agent', content: "AI 回應逾時，請重新整理或稍後再試。", type: 'chat' }]);
             isPollingRef.current = false;
+            // Allow retry
+            setCanRequestHelp(true);
             return;
         }
 
         try {
+            // V3: Pass submission_num to backend to poll STATUS of that specific submission
             const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId
+                problem_id: selectedProblemId,
+                submission_num: targetNum
             });
 
             const { status, reply, chat_log } = initRes.data;
@@ -252,11 +276,12 @@ const StudentCodingHelp: React.FC = () => {
                 setIsChatLoading(false);
                 isPollingRef.current = false;
             } else if (status === 'pending' || status === 'started') {
-                setTimeout(() => pollForAnalysisResult(retryCount + 1), 2000);
+                setTimeout(() => pollForAnalysisResult(targetNum, retryCount + 1), 2000);
             } else {
                 setIsChatLoading(false);
                 if (status === 'no_report') {
                     setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
+                    // No report found, maybe allow requesting again?
                 }
                 isPollingRef.current = false;
             }
@@ -265,6 +290,7 @@ const StudentCodingHelp: React.FC = () => {
             setIsChatLoading(false);
             setChatMessages(prev => [...prev, { role: 'agent', content: "請於「程式編碼」分頁提交程式碼。", type: 'chat' }]);
             isPollingRef.current = false;
+            setCanRequestHelp(true);
         }
     };
 
@@ -314,7 +340,64 @@ const StudentCodingHelp: React.FC = () => {
         }
     };
 
-    // 2. 切換 Tab (Phase 8: 按需生成)
+    // Phase 8: Manual Request Help
+    // Phase 8: Manual Request Help
+    const handleRequestHelp = async () => {
+        if (!canRequestHelp || isChatLoading || !selectedProblemId) return;
+
+        setCanRequestHelp(false); // Lock button
+        setIsChatLoading(true);
+
+        // Clear view for new analysis as per requirement
+        setChatMessages([]);
+
+        // V3: Lock to the current submission num for this help session
+        const helpNum = latestSubmissionNum;
+        setActiveHelpNum(helpNum);
+
+        try {
+            // V2: Snapshot Analysis - Lock to latestSubmissionNum
+            const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
+                student_id: student.stu_id,
+                problem_id: selectedProblemId,
+                force_refresh: true,
+                submission_num: helpNum
+            });
+
+            const { status, chat_log, reply } = initRes.data;
+
+            if (status === 'resumed') {
+                // 已有對話紀錄 -> 直接顯示
+                if (chat_log && chat_log.length > 0) {
+                    const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                        role: msg.role as 'user' | 'agent',
+                        content: msg.content,
+                        zpd: msg.zpd,
+                        timestamp: msg.timestamp,
+                        type: msg.type
+                    }));
+                    setChatMessages(msgs);
+                } else if (reply) {
+                    setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                }
+                setIsChatLoading(false);
+            } else if (status === 'started' || status === 'pending') {
+                // 分析已觸發或處理中 -> 開始輪詢
+                isPollingRef.current = true;
+                pollForAnalysisResult(helpNum);
+            } else {
+                setChatMessages([{ role: 'agent', content: "目前無錯誤報告。", type: 'chat' }]);
+                setIsChatLoading(false);
+            }
+        } catch (error) {
+            console.error("Request help failed:", error);
+            setChatMessages([{ role: 'agent', content: "請求失敗，請稍後再試。", type: 'chat' }]);
+            setIsChatLoading(false);
+            setCanRequestHelp(true); // Re-enable on error
+        }
+    };
+
+    // 2. 切換 Tab (Modified: Load chat history on chatbot tab)
     const handleTabChange = async (tab: 'editor' | 'chatbot' | 'practice') => {
         if (!selectedProblemId) return;
         if (tab === 'practice' && practiceStatus === 'locked') return;
@@ -323,55 +406,28 @@ const StudentCodingHelp: React.FC = () => {
 
         setActiveRightTab(tab);
 
-        if (tab === 'chatbot' && (chatMessages.length === 0 || shouldRefreshChatRef.current)) {
-            // 若剛提交新程式，清空舊訊息
-            if (shouldRefreshChatRef.current) {
-                setChatMessages([]);
-                shouldRefreshChatRef.current = false;
-            }
-            setIsChatLoading(true);
-
+        // V3: When switching to chatbot tab, load existing chat history
+        if (tab === 'chatbot' && chatMessages.length === 0 && !isChatLoading) {
             try {
-                // Phase 8: 呼叫 init API 觸發按需分析
-                const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
-                    student_id: student.stu_id,
-                    problem_id: selectedProblemId
-                });
-
-                const { status, chat_log, reply } = initRes.data;
-
-                if (status === 'resumed') {
-                    // 已有對話紀錄 -> 直接顯示
-                    if (chat_log && chat_log.length > 0) {
-                        const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
-                            role: msg.role as 'user' | 'agent',
-                            content: msg.content,
-                            zpd: msg.zpd,
-                            timestamp: msg.timestamp,
-                            type: msg.type
-                        }));
-                        setChatMessages(msgs);
-                    } else if (reply) {
-                        setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
-                    }
-                    setIsChatLoading(false);
-                } else if (status === 'started' || status === 'pending') {
-                    // 分析已觸發或處理中 -> 開始輪詢
-                    if (!isAccepted) {
-                        isPollingRef.current = true;
-                        pollForAnalysisResult();
-                    } else {
-                        setChatMessages([{ role: 'agent', content: "恭喜您已通過此題！請前往「練習題」分頁進行練習", type: 'chat' }]);
-                        setIsChatLoading(false);
-                    }
-                } else {
-                    // 未知狀態
-                    setChatMessages([{ role: 'agent', content: "請先提交程式碼後，若有錯誤再進行詢問。", type: 'chat' }]);
-                    setIsChatLoading(false);
+                const historyRes = await axios.get(
+                    `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`,
+                    { params: { submission_num: latestSubmissionNum || undefined } }
+                );
+                const chatLog = historyRes.data.chat_log || [];
+                if (chatLog.length > 0) {
+                    const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
+                        role: msg.role as 'user' | 'agent',
+                        content: msg.content,
+                        zpd: msg.zpd,
+                        timestamp: msg.timestamp,
+                        type: msg.type
+                    }));
+                    setChatMessages(msgs);
+                    // Set activeHelpNum to the submission that has this history
+                    setActiveHelpNum(latestSubmissionNum);
                 }
-            } catch (error) {
-                setChatMessages([{ role: 'agent', content: "請先提交程式碼後，若有錯誤再進行詢問。", type: 'chat' }]);
-                setIsChatLoading(false);
+            } catch (e) {
+                console.error("Failed to load chat history:", e);
             }
         }
     };
@@ -390,15 +446,22 @@ const StudentCodingHelp: React.FC = () => {
                 code: studentCode
             };
             const response = await axios.post(`${API_BASE_URL}/debugging/submit`, payload);
-            const { verdict, practice_question } = response.data;
+            const { verdict, practice_question, submission_num: newSubNum } = response.data;
 
             setResult(verdict);
             setHasSubmission(true); // 標記已提交過
+
+            // V3 Fix: Update latestSubmissionNum from backend response
+            // This is CRITICAL for snapshot polling to work correctly
+            if (newSubNum) {
+                setLatestSubmissionNum(newSubNum);
+            }
 
             const isAC = verdict === "Accepted" || (typeof verdict === 'string' && verdict.includes("AC"));
 
             if (isAC) {
                 setIsAccepted(true);
+                setCanRequestHelp(false); // Lock help button
 
                 // 處理 AC 後的練習題邏輯
                 if (practice_question && Array.isArray(practice_question) && practice_question.length > 0) {
@@ -426,14 +489,13 @@ const StudentCodingHelp: React.FC = () => {
                     pollForPractice();
                 }
             } else {
+                // Wrong Answer / Error
+                setCanRequestHelp(true); // Enable help button
                 if (response.data.message) {
                     console.log("Backend message:", response.data.message);
                 }
             }
-            setChatMessages([]);
-            isPollingRef.current = false;
-            // 新增：標記需要強制更新分析結果
-            shouldRefreshChatRef.current = true;
+            // shouldRefreshChatRef logic removed as we manually request help now
 
         } catch (error: any) {
             console.error("Run code error:", error);
@@ -452,10 +514,12 @@ const StudentCodingHelp: React.FC = () => {
         setIsChatLoading(true);
 
         try {
+            // V3: Send activeHelpNum so backend saves to the correct dialogue
             const res = await axios.post(`${API_BASE_URL}/debugging/help/chat`, {
                 student_id: student.stu_id,
                 problem_id: selectedProblemId,
-                message: userMsg
+                message: userMsg,
+                submission_num: activeHelpNum
             });
             setChatMessages(prev => [...prev, { role: 'agent', content: res.data.reply, type: 'chat' }]);
         } catch (error) {
@@ -481,12 +545,12 @@ const StudentCodingHelp: React.FC = () => {
             if (completedCount === totalCount) {
                 setPracticeStatus('done');
                 const finalAnswers = { ...userAnswers, [qId]: optionId };
-                await savePracticeResult(finalAnswers, true);
+                await savePracticeResult(finalAnswers);
             }
         }
     };
 
-    const savePracticeResult = async (currentAnswers: QuestionAnswerState, isAllDone: boolean) => {
+    const savePracticeResult = async (currentAnswers: QuestionAnswerState) => {
         if (!practiceId) return;
         try {
             const answersPayload = Object.entries(currentAnswers).map(([qid, oid]) => ({
@@ -647,7 +711,28 @@ const StudentCodingHelp: React.FC = () => {
                             {activeRightTab === 'chatbot' && (
                                 <div className="flex flex-col h-full bg-white">
                                     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-                                        {chatMessages.length === 0 && !isChatLoading && <div className="text-center text-gray-400 mt-10">準備載入對話紀錄...</div>}
+                                        {chatMessages.length === 0 && !isChatLoading && (
+                                            <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-4">
+                                                {isAccepted ? (
+                                                    <div className="bg-green-50 border border-green-200 p-6 rounded-lg text-green-800 text-center animate-fadeIn shadow-sm">
+                                                        <div className="text-4xl mb-3">🎉</div>
+                                                        <h3 className="text-lg font-bold mb-1">程式正確請前往練習題頁面</h3>
+                                                    </div>
+                                                ) : (
+                                                    <>
+                                                        <div className="text-4xl">🤖</div>
+                                                        <div className="text-center">
+                                                            <p className="font-medium">遇到困難了嗎？</p>
+                                                            <p className="text-sm text-gray-400 mt-1">
+                                                                {canRequestHelp
+                                                                    ? "點擊下方「求救」按鈕，讓 AI 幫您分析錯誤"
+                                                                    : "請先提交程式碼，若有錯誤即可使用求救功能"}
+                                                            </p>
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
                                         {chatMessages.map((msg, idx) => (
                                             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                                 <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
@@ -659,22 +744,50 @@ const StudentCodingHelp: React.FC = () => {
                                         {isChatLoading && <div className="text-gray-400 text-xs text-center animate-pulse">Thinking...</div>}
                                         <div ref={chatEndRef} />
                                     </div>
-                                    <div className="p-3 border-t bg-white flex space-x-2">
-                                        <input
-                                            className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
-                                            placeholder={isAccepted ? "題目已通過，無法繼續對話" : "針對錯誤提問..."}
-                                            value={chatInput}
-                                            onChange={(e) => setChatInput(e.target.value)}
-                                            onKeyDown={(e) => e.key === 'Enter' && !isAccepted && handleSendChat()}
-                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
-                                        />
+                                    <div className="p-3 border-t bg-white space-y-3">
                                         <button
-                                            onClick={handleSendChat}
-                                            disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
-                                            className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:bg-gray-300"
+                                            onClick={handleRequestHelp}
+                                            disabled={!canRequestHelp || isChatLoading || isAccepted}
+                                            className={`w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center transition-all
+                                                ${!canRequestHelp || isChatLoading || isAccepted
+                                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
+                                                    : 'bg-yellow-500 hover:bg-yellow-600 text-white shadow-sm hover:shadow'}`}
                                         >
-                                            Send
+                                            {isChatLoading ? (
+                                                <>
+                                                    <span className="animate-spin mr-2">⏳</span>
+                                                    分析中...
+                                                </>
+                                            ) : isAccepted ? (
+                                                <>
+                                                    <span className="mr-2">✨</span>
+                                                    程式已正確
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <span className="mr-2">🆘</span>
+                                                    求救 (Request Help)
+                                                </>
+                                            )}
                                         </button>
+
+                                        <div className="flex space-x-2">
+                                            <input
+                                                className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
+                                                placeholder={isAccepted ? "題目已通過，無法繼續對話" : chatMessages.length === 0 ? "請先點擊求救按鈕..." : "針對錯誤提問..."}
+                                                value={chatInput}
+                                                onChange={(e) => setChatInput(e.target.value)}
+                                                onKeyDown={(e) => e.key === 'Enter' && !isAccepted && chatMessages.length > 0 && handleSendChat()}
+                                                disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
+                                            />
+                                            <button
+                                                onClick={handleSendChat}
+                                                disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
+                                                className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:bg-gray-300"
+                                            >
+                                                Send
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             )}
