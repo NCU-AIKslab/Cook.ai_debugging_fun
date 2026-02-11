@@ -1,4 +1,5 @@
-name = "cookai-debugging-lab"
+# frontend/wrangler.toml
+name = 'cookai-debugging-fun'
 compatibility_date = "2024-12-01"
 
 # Cloudflare Workers 靜態資產設定
