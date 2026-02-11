@@ -1,0 +1,6 @@
+name = "cookai-debugging-lab"
+compatibility_date = "2024-12-01"
+
+# Cloudflare Workers 靜態資產設定
+[assets]
+directory = "dist"
