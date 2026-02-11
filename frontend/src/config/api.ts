@@ -2,7 +2,7 @@
 // 如果環境變數沒有正確加載，可以直接在這裡修改
 
 // const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const API_BASE_URL = 'http://140.115.54.161:8000';
+const API_BASE_URL = 'https://api.coolknowledge.ai';
 
 console.log('API_BASE_URL loaded:', API_BASE_URL); // 除錯用
 
