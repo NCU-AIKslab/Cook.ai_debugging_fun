@@ -102,6 +102,33 @@ class AnalysisQueue:
         """檢查特定任務是否正在處理中"""
         return task_id in self.processing_tasks
 
+    async def wait_for_prefix(self, prefix, exclude_task_id=None, timeout=60):
+        """
+        等待所有符合前綴的任務完成 (排除指定的 task_id)。
+        用於 AC 後等待同一題目的分析任務完成。
+        """
+        import time, logging
+        logger = logging.getLogger(__name__)
+
+        def _has_matching():
+            for tid in self.processing_tasks:
+                if tid.startswith(prefix) and tid != exclude_task_id:
+                    return True
+            return False
+
+        if not _has_matching():
+            return True
+
+        logger.info(f"wait_for_prefix: Waiting for tasks matching '{prefix}' (exclude={exclude_task_id})...")
+        start = time.time()
+        while _has_matching():
+            if time.time() - start > timeout:
+                logger.warning(f"wait_for_prefix: Timeout ({timeout}s) for prefix '{prefix}'")
+                return False
+            await asyncio.sleep(0.5)
+        logger.info(f"wait_for_prefix: All matching tasks completed for '{prefix}'")
+        return True
+
 
 # 全域 AI 分析佇列實例
 analysis_queue = AnalysisQueue(max_workers=15)

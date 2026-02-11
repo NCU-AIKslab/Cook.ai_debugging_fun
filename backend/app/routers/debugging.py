@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Path, Depends, BackgroundTa
 from typing import Optional, List, Dict, Any
 import json, re
 import logging
-from sqlalchemy import select, desc, insert, update, text, asc, func
+from sqlalchemy import select, desc, insert, update, delete, text, asc, func
 from pydantic import BaseModel
 
 # --- OJ & Core Imports ---
@@ -279,12 +279,68 @@ async def submit_code(
     # Error: 不自動觸發診斷分析 (改為學生切換至「程式修正」分頁時才觸發)
     if is_correct:
         logger.info(f"AC detected. Adding practice generation task to AnalysisQueue.")
-        # 使用 task_id 防止重複與追蹤
-        task_id = f"{payload.student_id}_{payload.problem_id}_{this_submission_num}"
+
+        # 先刪除舊的練習題紀錄，確保前端輪詢期間看到 exists=false (顯示"生成中")
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    delete(practice_table).where(
+                        practice_table.c.student_id == payload.student_id,
+                        practice_table.c.problem_id == payload.problem_id
+                    )
+                )
+                logger.info(f"Cleared old practice record for {payload.student_id}/{payload.problem_id}")
+        except Exception as e:
+            logger.error(f"Failed to clear old practice record: {e}")
+
+        # 定義背景任務: 等待分析 → 撈報告 → 生成練習 or 標記無練習
+        async def practice_generation_task(student_id, problem_id, submission_num, app_graph_inputs):
+            my_task_id = f"{student_id}_{problem_id}_{submission_num}_practice"
+            prefix = f"{student_id}_{problem_id}_"
+
+            # Step 1: 檢查是否有正在執行的「程式求救」分析任務，若有則等待
+            await analysis_queue.wait_for_prefix(prefix, exclude_task_id=my_task_id, timeout=45)
+
+            # Step 2: 重新撈取 Evidence Reports
+            current_reports = []
+            try:
+                with engine.connect() as conn:
+                    stmt = select(evidence_report_table.c.evidence_report).where(
+                        evidence_report_table.c.student_id == student_id,
+                        evidence_report_table.c.problem_id == problem_id
+                    ).order_by(desc(evidence_report_table.c.submitted_at)).limit(5)
+                    rows = conn.execute(stmt).fetchall()
+                    current_reports = [row[0] for row in rows if row[0]]
+            except Exception as e:
+                logger.error(f"Practice Gen: Failed to fetch reports: {e}")
+
+            # Step 3: 決定動作
+            if current_reports:
+                # Case 2.1: 有報告 → 生成練習題
+                logger.info(f"Practice Gen: Found {len(current_reports)} report(s). Generating practice questions.")
+                app_graph_inputs["previous_reports"] = current_reports
+                await run_background_graph_task(app_graph_inputs, submission_num)
+            else:
+                # Case 2.2: 無報告 → 直接寫入「無練習題」
+                logger.info(f"Practice Gen: No reports found. Writing 'No Practice' to DB.")
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(insert(practice_table).values(
+                            student_id=student_id,
+                            problem_id=problem_id,
+                            code_question=[],
+                            answer_is_correct=False
+                        ))
+                except Exception as e:
+                    logger.error(f"Practice Gen: Failed to save No-Practice: {e}")
+
+        task_id = f"{payload.student_id}_{payload.problem_id}_{this_submission_num}_practice"
         await analysis_queue.add_task(
-            run_background_graph_task,
-            initial_state,
+            practice_generation_task,
+            payload.student_id,
+            payload.problem_id,
             this_submission_num,
+            initial_state,
             task_id=task_id
         )
     else:

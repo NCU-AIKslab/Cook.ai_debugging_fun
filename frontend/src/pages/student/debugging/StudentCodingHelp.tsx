@@ -309,29 +309,33 @@ const StudentCodingHelp: React.FC = () => {
             const { data } = codeRes.data;
             const pInfo = data?.practice;
 
-            if (pInfo && pInfo.exists && pInfo.data && pInfo.data.length > 0) {
-                // 練習題已生成
-                setPracticeList(pInfo.data);
-                setPracticeId(pInfo.id);
-                const isCompleted = pInfo.completed;
-                setPracticeStatus(isCompleted ? 'done' : 'todo');
+            if (pInfo && pInfo.exists) {
+                if (pInfo.data && pInfo.data.length > 0) {
+                    // 練習題已生成 (有題目)
+                    setPracticeList(pInfo.data);
+                    setPracticeId(pInfo.id);
+                    const isCompleted = pInfo.completed;
+                    setPracticeStatus(isCompleted ? 'done' : 'todo');
 
-                if (pInfo.student_answer && Array.isArray(pInfo.student_answer)) {
-                    const ansMap: QuestionAnswerState = {};
-                    const fbMap: QuestionFeedbackState = {};
-                    pInfo.student_answer.forEach((rec: any) => {
-                        ansMap[rec.q_id] = rec.selected_option_id;
-                        if (rec.is_correct) {
-                            fbMap[rec.q_id] = true;
-                        }
-                    });
-                    setUserAnswers(ansMap);
-                    setFeedbackMap(fbMap);
+                    if (pInfo.student_answer && Array.isArray(pInfo.student_answer)) {
+                        const ansMap: QuestionAnswerState = {};
+                        const fbMap: QuestionFeedbackState = {};
+                        pInfo.student_answer.forEach((rec: any) => {
+                            ansMap[rec.q_id] = rec.selected_option_id;
+                            if (rec.is_correct) {
+                                fbMap[rec.q_id] = true;
+                            }
+                        });
+                        setUserAnswers(ansMap);
+                        setFeedbackMap(fbMap);
+                    }
+                } else {
+                    // exists=true 但 data=[] → 無練習題 (後端已確認無報告)
+                    setPracticeStatus('no_practice');
                 }
-
                 isPracticePollingRef.current = false;
             } else {
-                // 繼續輪詢
+                // exists=false → 練習題尚未生成，繼續輪詢
                 setTimeout(() => pollForPractice(retryCount + 1), 2000);
             }
         } catch (error) {
