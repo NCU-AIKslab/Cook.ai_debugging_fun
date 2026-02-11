@@ -16,6 +16,7 @@ from backend.app.agents.debugging.OJ.queue_manager import analysis_queue
 app = FastAPI(
     title="Cook.ai API Server",
     description="API for ingesting documents and generating educational materials.",
+    root_path="/debugging-backend",
 )
 
 # --- Add CORS Middleware ---
