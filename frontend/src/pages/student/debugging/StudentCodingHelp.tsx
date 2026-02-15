@@ -715,7 +715,7 @@ const StudentCodingHelp: React.FC = () => {
                             {activeRightTab === 'chatbot' && (
                                 <div className="flex flex-col h-full bg-white">
                                     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-                                        {chatMessages.length === 0 && !isChatLoading && (
+                                        {(isAccepted || (chatMessages.length === 0 && !isChatLoading)) && (
                                             <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-4">
                                                 {isAccepted ? (
                                                     <div className="bg-green-50 border border-green-200 p-6 rounded-lg text-green-800 text-center animate-fadeIn shadow-sm">
@@ -737,7 +737,7 @@ const StudentCodingHelp: React.FC = () => {
                                                 )}
                                             </div>
                                         )}
-                                        {chatMessages.map((msg, idx) => (
+                                        {!isAccepted && chatMessages.map((msg, idx) => (
                                             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                                 <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
                                                     {msg.role === 'agent' && <div className="text-xs font-bold text-blue-600 mb-1">System</div>}
@@ -757,12 +757,7 @@ const StudentCodingHelp: React.FC = () => {
                                                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
                                                     : 'bg-yellow-500 hover:bg-yellow-600 text-white shadow-sm hover:shadow'}`}
                                         >
-                                            {isChatLoading ? (
-                                                <>
-                                                    <span className="animate-spin mr-2">⏳</span>
-                                                    分析中...
-                                                </>
-                                            ) : isAccepted ? (
+                                            {isAccepted ? (
                                                 <>
                                                     <span className="mr-2">✨</span>
                                                     程式已正確
@@ -776,12 +771,19 @@ const StudentCodingHelp: React.FC = () => {
                                         </button>
 
                                         <div className="flex space-x-2">
-                                            <input
-                                                className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
+                                            <textarea
+                                                className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100 resize-none h-10 min-h-[40px] max-h-[120px] overflow-y-auto"
                                                 placeholder={isAccepted ? "題目已通過，無法繼續對話" : chatMessages.length === 0 ? "請先點擊求救按鈕..." : "針對錯誤提問..."}
                                                 value={chatInput}
                                                 onChange={(e) => setChatInput(e.target.value)}
-                                                onKeyDown={(e) => e.key === 'Enter' && !isAccepted && chatMessages.length > 0 && handleSendChat()}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                                        e.preventDefault();
+                                                        if (!isAccepted && chatMessages.length > 0) {
+                                                            handleSendChat();
+                                                        }
+                                                    }
+                                                }}
                                                 disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
                                             />
                                             <button
