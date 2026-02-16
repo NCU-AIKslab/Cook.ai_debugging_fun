@@ -186,6 +186,13 @@ async def submit_code(
     problem = load_problem_config(payload.problem_id)
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found.")
+    
+    # [新增] 檢查截止時間
+    now = datetime.now()
+    if problem.start_time and now < problem.start_time:
+         raise HTTPException(status_code=403, detail="Contest Not Started")
+    if problem.end_time and now > problem.end_time:
+         raise HTTPException(status_code=403, detail="Time Limit Exceeded: The submission deadline has passed.")
         
     # 3. Execute Judge (必須等待)
     try:
@@ -383,6 +390,15 @@ def get_precoding_status_endpoint(
 @router.post("/precoding/submit")
 def submit_precoding_answer_endpoint(payload: PreCodingSubmitRequest):
     try:
+        # [新增] 檢查時間
+        problem = load_problem_config(payload.problem_id)
+        if problem:
+            now = datetime.now()
+            if problem.start_time and now < problem.start_time:
+                raise HTTPException(status_code=403, detail="Contest Not Started")
+            if problem.end_time and now > problem.end_time:
+                raise HTTPException(status_code=403, detail="Time Limit Exceeded")
+
         result = process_precoding_submission(
             payload.student_id, 
             payload.problem_id, 
@@ -418,6 +434,15 @@ def get_precoding_logic_status_endpoint(
 async def precoding_logic_chat_endpoint(payload: PreCodingChatRequest):
     """處理學生的聊天訊息（Pre-Coding Logic 階段）"""
     try:
+        # [新增] 檢查時間
+        problem = load_problem_config(payload.problem_id)
+        if problem:
+            now = datetime.now()
+            if problem.start_time and now < problem.start_time:
+                raise HTTPException(status_code=403, detail="Contest Not Started")
+            if problem.end_time and now > problem.end_time:
+                raise HTTPException(status_code=403, detail="Time Limit Exceeded")
+
         result = await PreCodingManager.process_chat(
             payload.student_id, 
             payload.problem_id, 

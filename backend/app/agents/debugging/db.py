@@ -82,6 +82,8 @@ problem_table = Table(
     Column("time_limit", Integer),
     Column("judge_type", String),
     Column("entry_point", String),
+    Column("start_time", DateTime),
+    Column("end_time", DateTime),
     schema="debugging",
     extend_existing=True,
 )
@@ -294,6 +296,8 @@ def load_problem_config(problem_id: str) -> ProblemConfig:
                 problem_table.c.time_limit,
                 problem_table.c.judge_type,
                 problem_table.c.entry_point,
+                problem_table.c.start_time,
+                problem_table.c.end_time,
             ).where(problem_table.c.problem_id == problem_id)
         ).fetchone()
 
@@ -310,6 +314,8 @@ def load_problem_config(problem_id: str) -> ProblemConfig:
         entry_point=row_mapping["entry_point"],
         time_limit_ms=row_mapping["time_limit"] or 1000,
         test_cases=test_cases,
+        start_time=row_mapping["start_time"],
+        end_time=row_mapping["end_time"],
     )
 
 def save_submission(problem_id, student_id, code, verdict, results):

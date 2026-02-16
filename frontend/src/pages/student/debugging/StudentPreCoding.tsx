@@ -99,6 +99,38 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     // Tab 狀態
     const [activeTab, setActiveTab] = useState<'concept' | 'implementation'>('concept');
 
+    // Time Status Logic
+    const [timeStatus, setTimeStatus] = useState<'active' | 'not_started' | 'ended'>('active');
+
+    useEffect(() => {
+        const checkTimeStatus = () => {
+            if (!problemData) return;
+            const now = new Date();
+
+            if (problemData.start_time) {
+                const start = new Date(problemData.start_time);
+                if (now < start) {
+                    setTimeStatus('not_started');
+                    return;
+                }
+            }
+
+            if (problemData.end_time) {
+                const end = new Date(problemData.end_time);
+                if (now > end) {
+                    setTimeStatus('ended');
+                    return;
+                }
+            }
+
+            setTimeStatus('active');
+        };
+
+        checkTimeStatus();
+        const interval = setInterval(checkTimeStatus, 1000); // Check every second for immediate active/lock update
+        return () => clearInterval(interval);
+    }, [problemData]);
+
     // 舊版 Pre-Coding 狀態
     const [pcData, setPcData] = useState<PreCodingState | null>(null);
     const [pcLoading, setPcLoading] = useState(false);
@@ -254,7 +286,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     // --- Chat 送出邏輯 ---
     const handleSendChat = async (messageOverride?: string) => {
         const userMessage = messageOverride || chatInput.trim();
-        if (!userMessage || isSendingChat || !selectedProblemId) return;
+        if (!userMessage || isSendingChat || !selectedProblemId || timeStatus !== 'active') return;
 
         setChatInput('');
         setSuggestedReplies([]);
@@ -337,7 +369,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
 
     // --- 舊版提交邏輯 ---
     const handleAnswerSubmit = async (stage: 'logic' | 'error_code' | 'explain_code', questionId: string, optionId: number) => {
-        if (!pcData || !selectedProblemId) return;
+        if (!pcData || !selectedProblemId || timeStatus !== 'active') return;
         if (submittingIds.has(questionId)) return;
 
         setSubmittingIds(prev => new Set(prev).add(questionId));
@@ -499,7 +531,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                         return (
                             <button
                                 key={opt.id}
-                                disabled={isLocked || isSubmitting}
+                                disabled={isLocked || isSubmitting || timeStatus !== 'active'}
                                 onClick={() => handleAnswerSubmit(stage, question.id, opt.id)}
                                 className={btnClass}
                             >
@@ -563,7 +595,11 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                         >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
                         </button>
-                        <h2 className="font-bold text-gray-800">{problemData?.title || '請選擇題目'}</h2>
+                        <h2 className="font-bold text-gray-800 flex items-center gap-2">
+                            {problemData?.title || '請選擇題目'}
+                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">考試結束 (Time's Up)</span>}
+                            {timeStatus === 'not_started' && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded border border-yellow-200">未開始 (Not Started)</span>}
+                        </h2>
                     </div>
                 </div>
 
@@ -778,23 +814,23 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                                     onChange={(e) => setChatInput(e.target.value)}
                                                                     onKeyDown={handleKeyDown}
                                                                     onCompositionStart={() => setIsComposing(true)}
-                                                                    onCompositionEnd={(e) => {
+                                                                    onCompositionEnd={() => {
                                                                         setIsComposing(false);
                                                                     }}
-                                                                    placeholder="輸入您的回答..."
-                                                                    className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all"
+                                                                    placeholder={timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "考試時間已結束。" : "輸入您的回答..."}
+                                                                    className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                                     rows={2}
-                                                                    disabled={isSendingChat}
+                                                                    disabled={isSendingChat || timeStatus !== 'active'}
                                                                 />
                                                                 <button
                                                                     onClick={() => handleSendChat()}
-                                                                    disabled={!chatInput.trim() || isSendingChat}
+                                                                    disabled={!chatInput.trim() || isSendingChat || timeStatus !== 'active'}
                                                                     // 修改 2: 
                                                                     // - 移除 'self-end' (讓高度跟隨 flex 容器撐開，即與 textarea 等高)
                                                                     // - 加入 'h-auto flex items-center justify-center' (確保高度自動適應且文字置中)
                                                                     className="px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium text-sm h-auto flex items-center justify-center"
                                                                 >
-                                                                    Send
+                                                                    {timeStatus === 'active' ? 'Send' : 'Locked'}
                                                                 </button>
                                                             </div>
                                                         </div>

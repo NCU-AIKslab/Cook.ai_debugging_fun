@@ -23,6 +23,9 @@ class ProblemConfig:
     entry_point: Optional[str]
     time_limit_ms: int
     test_cases: list
+    start_time: Optional[Any] = None
+    end_time: Optional[Any] = None
+    test_cases: list
 
 
 @dataclass
