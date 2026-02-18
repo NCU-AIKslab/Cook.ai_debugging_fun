@@ -22,14 +22,8 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ================= 2. Pydantic Schema =================
 
-# ================= 2. Pydantic Schema =================
-
-class ArchitectureItem(BaseModel):
-    intention: str = Field(..., description="這段程式碼的意圖 (Intention)")
-    code: str = Field(..., description="對應的程式碼 (Code)")
-
 class ArchitectureQuestion(BaseModel):
-    code: str = Field(..., description="程式碼模板")
+    code: str = Field(..., description="挖空後的程式碼框架")
 
 # ================= 3. AI 生成邏輯 =================
 
@@ -38,7 +32,7 @@ def get_unit_from_id(problem_id: str) -> str:
         return problem_id.split("_")[0]
     return "C1"
 
-def generate_architecture_questions(problem_data, problem_id, manual_unit=None):
+def generate_architecture_questions(problem_data, problem_id, manual_unit=None, allowed_concepts=None):
     # Expecting problem_data to have solution_code at the end
     if len(problem_data) == 6:
         title, desc, in_desc, out_desc, samples, solution_code = problem_data
@@ -48,31 +42,46 @@ def generate_architecture_questions(problem_data, problem_id, manual_unit=None):
         solution_code = "# No solution code provided"
         
     main_concept = manual_unit if manual_unit else get_unit_from_id(problem_id)
-    allowed_scope = f"- {main_concept}: {CONCEPT_DETAILS.get(main_concept, '')}"
-    if main_concept not in ['C1', 'C2']:
-         allowed_scope += f"\n- C1: {CONCEPT_DETAILS['C1']}"
-         allowed_scope += f"\n- C2: {CONCEPT_DETAILS['C2']}"
+    
+    if allowed_concepts:
+        # User manual selection
+        allowed_scope = ""
+        for c in allowed_concepts:
+            if c in CONCEPT_DETAILS:
+                allowed_scope += f"- {c}: {CONCEPT_DETAILS[c]}\n"
+    else:
+        # Default auto logic
+        allowed_scope = f"- {main_concept}: {CONCEPT_DETAILS.get(main_concept, '')}"
+        if main_concept not in ['C1', 'C2']:
+             allowed_scope += f"\n- C1: {CONCEPT_DETAILS['C1']}"
+             allowed_scope += f"\n- C2: {CONCEPT_DETAILS['C2']}"
+
+    json_example_str = """
+    {
+    "code": "n = int(input())\nprime_count = 0  # 用來記錄找到幾個質數\n\n# 外層迴圈：遍歷每一個數字\nfor num in range(2, _____):   # ← 設定正確範圍\n    is_prime = True           # 先假設 num 是質數（立起旗標）\n\n    # 內層迴圈：檢查因數\n    for divisor in range(2, num):\n        if __________________:   # ← 填寫整除條件\n            is_prime = False\n            break                # 不是質數，後面不用檢查\n\n    if is_prime == True:\n        __________________      # ← 發現一個質數\n\nprint(f\"1 到 {n} 之間共有 {prime_count} 個質數\")"
+    }
+    """
 
     system_prompt = f"""
-    【角色設定】你是 Python 程式架構教學專家，專門設計「程式架構教學 (Architecture Scaffolding)」。
+    【角色設定】你是 Python 程式架構教學專家，專門設計「程式填空題 (Code Cloze)」。
 
-    【核心概念】：{main_concept} ({CONCEPT_DETAILS.get(main_concept, "")})
+    【核心概念】：{main_concept} ({CONCEPT_DETAILS.get(main_concept)})
 
     【允許使用的語法範圍】：
     {allowed_scope}
 
     【任務目標】
-    請使用提供的【標準解答】，設計一個「單一結構化」的程式碼架構模板 (Architecture Template)。
+    請使用提供的【標準解答】，將其中關於「{main_concept}」或相關範圍的關鍵邏輯處挖空（使用 '_____' 代替）。
     
-    🔥 【分解規範】
-    1. **Code (程式碼)**：提供一個包含「挖空」或「註解提示」的程式碼模板 (Template)，讓學生可以填空。
-       - 例如： `for i in range(____): # 請填入次數`
-       - 或保留關鍵結構，讓學生填寫細節。
-    2. **完整性**：模板應覆蓋解題的關鍵架構。
-    3. **語法限制**：程式碼部分必須符合允許的語法範圍。
+    🔥 【挖空規範】
+    1. 使用原題解答：`code` 必須基於提供的標準解答，不可改編變數名或邏輯。
+    2. 關鍵處挖空：將核心演算法、邊界條件或關鍵函式挖空。挖空數量為 2~5 個。
+    3. 語法限制：挖空以外的程式碼部分，**絕對不能超出** 上述允許的語法範圍。
+    4. 挖空深度：底線的長度應視被取代的程式碼內容長度而定，使其看起來自然。
 
     【輸出規範】
-    請直接輸出 JSON 格式，包含 `code` (字串) 欄位即可。
+    請直接輸出 JSON 格式，結構需符合：
+    {json_example_str}
     """
 
     user_prompt = f"""
@@ -93,7 +102,7 @@ def generate_architecture_questions(problem_data, problem_id, manual_unit=None):
          
     try:
         completion = openai_client.beta.chat.completions.parse(
-            model="gpt-4o", 
+            model="gpt-5.1", 
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

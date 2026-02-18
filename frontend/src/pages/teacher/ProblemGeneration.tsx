@@ -73,6 +73,21 @@ export default function ProblemGeneration() {
     const [genContent, setGenContent] = useState('');
     const [genLoading, setGenLoading] = useState(false);
 
+    // Manual Control States
+    const [coreConcept, setCoreConcept] = useState<string>('');
+    const [allowedScope, setAllowedScope] = useState<string[]>([]);
+
+    const CONCEPTS = [
+        { id: 'C1', label: 'C1: 變數與資料型態' },
+        { id: 'C2', label: 'C2: 數值與字串運算' },
+        { id: 'C3', label: 'C3: List列表' },
+        { id: 'C4', label: 'C4: 條件判斷' },
+        { id: 'C5', label: 'C5: For迴圈' },
+        { id: 'C6', label: 'C6: While迴圈' },
+        { id: 'C7', label: 'C7: Dictionary字典' },
+        { id: 'C8', label: 'C8: Function函式' },
+    ];
+
     const fetchProblem = async () => {
         if (!problemId) return;
         setLoading(true);
@@ -117,6 +132,11 @@ export default function ProblemGeneration() {
                 } else {
                     setGenContent('');
                 }
+
+                // Reset manual controls on load? Or keep them? 
+                // Let's reset to avoid confusion
+                setCoreConcept('');
+                setAllowedScope([]);
 
                 setMessage('Problem loaded.');
             }
@@ -209,7 +229,13 @@ export default function ProblemGeneration() {
         if (!problemId) return;
         setGenLoading(true);
         try {
-            const res = await axios.post(`${API_BASE_URL}/teacher/problem/${problemId}/generate/${genType}`);
+            // Include manual settings
+            const payload = {
+                core_concept: coreConcept || null,
+                allowed_scope: allowedScope.length > 0 ? allowedScope : null
+            };
+
+            const res = await axios.post(`${API_BASE_URL}/teacher/problem/${problemId}/generate/${genType}`, payload);
             if (res.data.status === 'success') {
                 setGenContent(JSON.stringify(res.data.data, null, 2));
                 setMessage(`${genType} content generated.`);
@@ -505,6 +531,46 @@ export default function ProblemGeneration() {
                 <div className="bg-white p-6 rounded-lg shadow-sm space-y-4 flex flex-col h-full">
                     <h2 className="text-xl font-semibold mb-4 border-b pb-2">AI 題目生成 (AI Generation)</h2>
 
+                    {/* New Manual Controls */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 p-4 bg-gray-50 rounded border">
+                        <div>
+                            <label className="block text-sm font-medium mb-2">核心概念 (Core Concept) - 可選</label>
+                            <select
+                                className="w-full border p-2 rounded bg-white"
+                                value={coreConcept}
+                                onChange={(e) => setCoreConcept(e.target.value)}
+                            >
+                                <option value="">-- 自動判斷 (Auto) --</option>
+                                {CONCEPTS.map(c => (
+                                    <option key={c.id} value={c.id}>{c.label}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-2">允許使用的語法範圍 (Allowed Scope) - 可選</label>
+                            <div className="flex flex-wrap gap-2">
+                                {CONCEPTS.map(c => (
+                                    <label key={c.id} className="flex items-center space-x-1 cursor-pointer bg-white p-1 rounded border hover:bg-gray-100">
+                                        <input
+                                            type="checkbox"
+                                            value={c.id}
+                                            checked={allowedScope.includes(c.id)}
+                                            onChange={(e) => {
+                                                if (e.target.checked) {
+                                                    setAllowedScope([...allowedScope, c.id]);
+                                                } else {
+                                                    setAllowedScope(allowedScope.filter(id => id !== c.id));
+                                                }
+                                            }}
+                                            className="rounded"
+                                        />
+                                        <span className="text-xs">{c.id}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
                     <div className="flex gap-2 mb-2">
                         {['explanation', 'debugging', 'architecture'].map((t) => (
                             <button
@@ -540,6 +606,7 @@ export default function ProblemGeneration() {
                             </div>
                         </div>
 
+                        {/* ... existing generated content display ... */}
                         <div className="flex-1 border rounded overflow-hidden min-h-[500px] p-4 relative bg-gray-50 overflow-y-auto">
                             {!genContent ? (
                                 <div className="flex items-center justify-center h-full text-gray-500">

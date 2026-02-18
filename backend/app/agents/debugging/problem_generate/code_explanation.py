@@ -23,25 +23,25 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= 2. 定義資料結構 (Pydantic Schema) =================
 
 class Option(BaseModel):
-    id: int = Field(..., description="選項編號 (1~4)")
-    label: str = Field(..., description="選項內容 (必須是對程式功能的自然語言描述，例如：'計算兩數之和')")
-    feedback: str = Field(..., description="選項回饋 (解釋為何該描述正確或錯誤)")
+    id: int
+    label: str
+    feedback: str
 
 class CodeContent(BaseModel):
-    content: str = Field(..., description="程式碼片段。注意：必須是正確的程式碼，但嚴格禁止與原題情境相同並且複雜度須下降。")
+    content: str
 
 class QuestionContent(BaseModel):
-    text: str = Field(..., description="題目敘述 (固定為：'這段程式碼的主要功能是什麼？')")
-    code: CodeContent = Field(..., description="程式碼物件")
+    text: str = "這段程式碼的主要功能是什麼？"
+    code: CodeContent
 
 class AnswerConfig(BaseModel):
-    correct_id: int = Field(..., description="正確選項 ID")
-    explanation: str = Field(..., description="完整詳解")
+    correct_id: int
+    explanation: str
 
 class ExplanationQuestion(BaseModel):
-    id: str = Field(..., description="題目編號 (Q1)")
-    type: str = Field("code_explanation", description="固定為 code_explanation")
-    targeted_concept: str = Field(..., description="此題針對的觀念拆解")
+    id: str
+    type: str = "code_explanation"
+    targeted_concept: str
     options: List[Option]
     question: QuestionContent
     answer_config: AnswerConfig
@@ -56,7 +56,7 @@ def get_unit_from_id(problem_id: str) -> str:
         return problem_id.split("_")[0]
     return "C1"
 
-def generate_explanation_questions(problem_data, problem_id, manual_unit=None):
+def generate_explanation_questions(problem_data, problem_id, manual_unit=None, allowed_concepts=None):
     # problem_data format: (title, description, input_description, output_description, samples, [solution_code])
     if len(problem_data) == 6:
         title, desc, in_desc, out_desc, samples, solution_code = problem_data
@@ -66,23 +66,19 @@ def generate_explanation_questions(problem_data, problem_id, manual_unit=None):
     unit_id = manual_unit if manual_unit else get_unit_from_id(problem_id)
     unit_topic = CONCEPT_DETAILS.get(unit_id, "Python 基礎")
     
-    # 建立允許使用的語法範圍 string
-    # Assuming valid_concept_ids is all concepts up to current unit? Or just the current unit?
-    # In the notebook, it passed CONCEPT_FILTER list.
-    # Here let's assume we want to focus on the current unit, but maybe allowed scope includes previous?
-    # For now, let's just use the current unit and maybe C1-C8 if passed.
-    # To keep it simple and independent, let's just use all concepts if no specific filter is provided, 
-    # OR follow the notebook logic which seemingly expected a list.
-    # But here we might just have one unit ID. 
-    # Let's adapt to use logical scope: current unit + previous units? 
-    # Actually the notebook `CONCEPT_FILTER = ["C4", "C8", ...]` implies prioritized list.
-    # Let's just use the unit_id provided as the main concept.
-    
-    allowed_scope = f"- {unit_id}: {unit_topic}"
-    # Maybe add basic concepts C1, C2 if not C1/C2?
-    if unit_id not in ['C1', 'C2']:
-        allowed_scope += f"\n- C1: {CONCEPT_DETAILS['C1']}"
-        allowed_scope += f"\n- C2: {CONCEPT_DETAILS['C2']}"
+    if allowed_concepts:
+        # User manual selection
+        allowed_scope = ""
+        for c in allowed_concepts:
+            if c in CONCEPT_DETAILS:
+                allowed_scope += f"- {c}: {CONCEPT_DETAILS[c]}\n"
+    else:
+        # Default auto logic
+        allowed_scope = f"- {unit_id}: {unit_topic}"
+        # Maybe add basic concepts C1, C2 if not C1/C2?
+        if unit_id not in ['C1', 'C2']:
+            allowed_scope += f"\n- C1: {CONCEPT_DETAILS['C1']}"
+            allowed_scope += f"\n- C2: {CONCEPT_DETAILS['C2']}"
 
     json_example_str = """
     [
@@ -109,35 +105,42 @@ def generate_explanation_questions(problem_data, problem_id, manual_unit=None):
     system_prompt = f"""
     【角色設定】你是 Python 程式教學專家，專精於引導初學者進行「程式碼閱讀理解 (Code Comprehension)」。
 
-    【當前教學單元】：**{unit_id}: {unit_topic}**
-    
+    【核心概念】：**{unit_id}: {unit_topic}**
+
+    【允許使用的語法範圍】：
+    {allowed_scope}
+
+    【嚴格限制】：
+    生成的程式碼內容 **絕對不能超出** 以上提供的「允許使用的語法範圍」。如果範圍內沒有提到迴圈(C5/C6)或判斷式(C4)，則程式碼中嚴禁出現相關語法。
+
     【任務目標】
-    請針對【原始題目資訊】的核心觀念，設計 **1 題** 「程式碼行為解釋 (Behavior Description)」選擇題。選項最多**3個**
-    讓學生在 **不寫程式** 的情況下，透過閱讀程式碼來理解解題邏輯。
+    請針對【原始題目資訊】中的「核心運算邏輯」，拆解出一個**子題目（關鍵邏輯片段）**。
+    設計 **1 題** 「程式碼行為解釋 (Behavior Description)」選擇題，選項最多 **3 個**。
+    此題旨在讓學生專注理解該原題背後的純程式邏輯或數學轉換，**不需加入任何生活情境包裝**。
 
-    🔥 **絕對防洩題機制 (Anti-Leak Rules) - 違反者即刻失敗** 🔥
-    1. **情境置換 (Scenario Shift)**：
-       - 生成的程式碼 (`code.content`) **絕對不可** 使用與原題相同的情境與相同複雜度。
-       - **範例**：
-         - 原題：計算「BMI」(體重/身高^2)。
-         - 生成題：必須改為計算「長方形面積」(長*寬) 或 「平均分數」(總分/3)。
-         - **邏輯 (數學運算結構) 概念相似(複雜度須下降)！**
+    **絕對邏輯拆解機制 (Logic Deconstruction Rules)**
+    1. **去情境化 (Pure Logic Only)**：
+    - 程式碼應呈現純粹的邏輯運算。**不要**提到原題的背景（例如：不要提到 BMI、餐費、超市）。
+    - 變數名稱應保持抽象（如 `a`, `b`, `ans`, `val`, `temp`）。
     
-    2. **變數混淆 (Variable Obfuscation)**：
-       - **嚴禁** 使用原題描述中出現的變數名稱（如 input/output description 提到的變數）。
-       - 請使用通用的變數名稱 (如 `a`, `b`, `x`, `total`, `result`) 或全新情境的變數 (如 `price`, `discount`)。
+    2. **關鍵邏輯子集 (Key Logic Sub-task)**：
+    - 程式碼必須是原題目的「核心零件」。例如：
+        - 原題是「計算折扣後金額」，子題目程式碼應專注於「百分比的乘法運算」。
+        - 原題是「判斷閏年」，子題目程式碼應專注於「取餘數 `%` 的邏輯」。
+    - **複雜度必須低於原題**，只取原題中最關鍵的一步。
 
-    3. **禁止提供解答**：
-       - 題目中的程式碼 **不能** 是原題目的直接解答。學生如果直接複製這段程式碼去提交原題，**必須是 0 分 (Wrong Answer)**。
+    3. **禁止提供完整解答**：
+    - 題目中的程式碼僅為片段，**不能**是原題目的完整解答。直接複製此片段去提交原題必須無法過關。
 
     【生成步驟】
-    1. **提取核心邏輯**：分析原題用到什麼邏輯？(例如：交換變數、字串串接、取餘數判斷奇偶)。
-    2. **創造新情境**：用一個完全不同的生活例子來包裝這個邏輯。
-    3. **撰寫程式碼**：寫出新情境下的正確程式碼。
-    4. **設計選項**：選項必須是「自然語言的功能描述」，說明這段程式碼在做什麼。
+    1. **提取核心邏輯**：從原題中識別出最關鍵的運算邏輯（例如：單位換算、字串拼接、特定算式）。
+    2. **邏輯純化**：移除所有描述性文字與情境變數，將其轉化為簡單的變數運算。
+    3. **撰寫程式碼**：寫出該關鍵邏輯的純淨程式碼片段。
+    4. **設計選項**：選項必須是「自然語言的行為描述」，說明這段程式碼在對資料進行什麼樣的處理。
 
     【輸出規範】
-    請直接輸出 JSON 格式。
+    請直接輸出 JSON 格式，結構需符合：
+    {json_example_str}
     """
 
     user_prompt = f"""
@@ -148,13 +151,11 @@ def generate_explanation_questions(problem_data, problem_id, manual_unit=None):
     輸入說明：{in_desc}
     輸出說明：{out_desc}
     範例數據：{samples}
-
-    請依照「防洩題機制」進行情境置換，並生成一題行為解釋題目 (JSON)。
     """
 
     try:
         completion = openai_client.beta.chat.completions.parse(
-            model="gpt-4o", 
+            model="gpt-5.1", 
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

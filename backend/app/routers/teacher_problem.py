@@ -136,13 +136,25 @@ def get_full_problem(problem_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class GenerateRequest(BaseModel):
+    core_concept: Optional[str] = None
+    allowed_scope: Optional[List[str]] = None
+
 @router.post("/{problem_id}/generate/{gen_type}")
-def generate_content(problem_id: str, gen_type: str = Path(..., regex="^(explanation|debugging|architecture)$")):
+def generate_content(
+    problem_id: str, 
+    gen_type: str = Path(..., regex="^(explanation|debugging|architecture)$"),
+    request_body: GenerateRequest = None
+):
     """
     Trigger generation for a specific type.
     gen_type: 'explanation', 'debugging', 'architecture'
     """
     try:
+        # Default values if no body provided
+        core_concept = request_body.core_concept if request_body else None
+        allowed_concepts = request_body.allowed_scope if request_body else None
+
         # 1. Fetch Problem Data
         with engine.connect() as conn:
             stmt = select(Problem).where(Problem.problem_id == problem_id)
@@ -167,13 +179,13 @@ def generate_content(problem_id: str, gen_type: str = Path(..., regex="^(explana
         target_column = ""
         
         if gen_type == "explanation":
-            result = generate_explanation_questions(problem_data, problem_id)
+            result = generate_explanation_questions(problem_data, problem_id, manual_unit=core_concept, allowed_concepts=allowed_concepts)
             target_column = "explain_code_question"
         elif gen_type == "debugging":
-            result = generate_debugging_questions(problem_data, problem_id)
+            result = generate_debugging_questions(problem_data, problem_id, manual_unit=core_concept, allowed_concepts=allowed_concepts)
             target_column = "error_code_question"
         elif gen_type == "architecture":
-             result = generate_architecture_questions(problem_data, problem_id)
+             result = generate_architecture_questions(problem_data, problem_id, manual_unit=core_concept, allowed_concepts=allowed_concepts)
              # Note: generate_architecture_questions returns a dict string or dict?
              # My implementation returns a dict (model_dump()).
              # Wait, code_architecture.py returns `completion.choices[0].message.parsed.model_dump()`.

@@ -56,7 +56,7 @@ def get_unit_from_id(problem_id: str) -> str:
         return problem_id.split("_")[0]
     return "C1"
 
-def generate_debugging_questions(problem_data, problem_id, manual_unit=None):
+def generate_debugging_questions(problem_data, problem_id, manual_unit=None, allowed_concepts=None):
     if len(problem_data) == 6:
         title, desc, in_desc, out_desc, samples, solution_code = problem_data
     else:
@@ -66,10 +66,17 @@ def generate_debugging_questions(problem_data, problem_id, manual_unit=None):
     main_concept = manual_unit if manual_unit else get_unit_from_id(problem_id)
     
     # Construct allowed scope text
-    allowed_scope = f"- {main_concept}: {CONCEPT_DETAILS.get(main_concept, '')}"
-    if main_concept not in ['C1', 'C2']:
-         allowed_scope += f"\n- C1: {CONCEPT_DETAILS['C1']}"
-         allowed_scope += f"\n- C2: {CONCEPT_DETAILS['C2']}"
+    if allowed_concepts:
+        # User manual selection
+        allowed_scope = ""
+        for c in allowed_concepts:
+            if c in CONCEPT_DETAILS:
+                allowed_scope += f"- {c}: {CONCEPT_DETAILS[c]}\n"
+    else:
+        allowed_scope = f"- {main_concept}: {CONCEPT_DETAILS.get(main_concept, '')}"
+        if main_concept not in ['C1', 'C2']:
+             allowed_scope += f"\n- C1: {CONCEPT_DETAILS['C1']}"
+             allowed_scope += f"\n- C2: {CONCEPT_DETAILS['C2']}"
 
     json_example_str = """
     [
@@ -102,7 +109,7 @@ def generate_debugging_questions(problem_data, problem_id, manual_unit=None):
     system_prompt = f"""
     【角色設定】你是 Python 程式教學專家，專門設計「除錯 (Debugging)」訓練。
 
-    【核心概念】：{main_concept}
+    【核心概念】：{main_concept} ({CONCEPT_DETAILS.get(main_concept)})
     【允許使用的語法範圍】：
     {allowed_scope}
 
@@ -112,7 +119,7 @@ def generate_debugging_questions(problem_data, problem_id, manual_unit=None):
     2. **錯誤程式碼**：在 `code.content` 提供一段帶有錯誤(Bug)的程式碼，導致其無法完成上述任務。
     3. **除錯選擇題**：設計最多 3 個選項，讓學生找出錯誤原因。
 
-    🔥 【絕對邏輯拆解機制】
+    【絕對邏輯拆解機制】
     1. **去情境化 (Pure Logic)**：禁止提及原題背景（如 BMI、餐費）。變數名必須抽象化（如 a, b, res, val）。
     2. **關鍵邏輯子集**：程式碼僅呈現原題最核心的「運算零件」。例如：原題算平均，子任務應專注於「總和除以數量」的邏輯。
     3. **語法嚴格限制**：生成的程式碼 **絕對不能超出** 提供的語法範圍。
@@ -126,7 +133,8 @@ def generate_debugging_questions(problem_data, problem_id, manual_unit=None):
     4. 設計選項：選項應針對 Bug 的原因進行自然語言描述。
 
     【輸出規範】
-    請直接輸出 JSON 格式。
+    請直接輸出 JSON 格式，結構需符合：
+    {json_example_str}
     """
 
     user_prompt = f"""
@@ -141,7 +149,7 @@ def generate_debugging_questions(problem_data, problem_id, manual_unit=None):
 
     try:
         completion = openai_client.beta.chat.completions.parse(
-            model="gpt-4o", 
+            model="gpt-5.1", 
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
