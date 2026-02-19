@@ -77,6 +77,10 @@ export default function ProblemGeneration() {
     const [coreConcept, setCoreConcept] = useState<string>('');
     const [allowedScope, setAllowedScope] = useState<string[]>([]);
 
+    // Editor text states
+    const [samplesJson, setSamplesJson] = useState('[]');
+    const [testCasesJson, setTestCasesJson] = useState('[]');
+
     const CONCEPTS = [
         { id: 'C1', label: 'C1: 變數與資料型態' },
         { id: 'C2', label: 'C2: 數值與字串運算' },
@@ -125,6 +129,8 @@ export default function ProblemGeneration() {
                 };
 
                 setProblemData(loadedData);
+                setSamplesJson(JSON.stringify(loadedData.samples, null, 2));
+                setTestCasesJson(JSON.stringify(loadedData.test_cases, null, 2));
 
                 // Initial load content based on current genType
                 if (loadedData.precoding && loadedData.precoding[genType]) {
@@ -206,7 +212,7 @@ export default function ProblemGeneration() {
             if (!payload.start_time) delete (payload as any).start_time;
             if (!payload.end_time) delete (payload as any).end_time;
 
-            const res = await axios.post(`${API_BASE_URL}/teacher/problem/`, payload);
+            await axios.post(`${API_BASE_URL}/teacher/problem/`, payload);
             setMessage('儲存成功');
             fetchProblemList(); // Refresh list
         } catch (error: any) {
@@ -220,6 +226,8 @@ export default function ProblemGeneration() {
     const handleNewProblem = () => {
         setProblemId('');
         setProblemData(INITIAL_PROBLEM_DATA);
+        setSamplesJson('[]');
+        setTestCasesJson('[]');
         setMessage('已清除內容，請輸入新題目資訊');
     };
 
@@ -464,11 +472,13 @@ export default function ProblemGeneration() {
                                     <Editor
                                         height="100%"
                                         defaultLanguage="json"
-                                        value={JSON.stringify(problemData.samples, null, 2)}
+                                        value={samplesJson}
                                         onChange={(val: string | undefined) => {
+                                            const value = val || '';
+                                            setSamplesJson(value);
                                             try {
-                                                const parsed = JSON.parse(val || '[]');
-                                                setProblemData({ ...problemData, samples: parsed });
+                                                const parsed = JSON.parse(value);
+                                                setProblemData(prev => ({ ...prev, samples: parsed }));
                                             } catch (err) { }
                                         }}
                                         options={{ minimap: { enabled: false }, fontSize: 12 }}
@@ -481,11 +491,13 @@ export default function ProblemGeneration() {
                                     <Editor
                                         height="100%"
                                         defaultLanguage="json"
-                                        value={JSON.stringify(problemData.test_cases, null, 2)}
+                                        value={testCasesJson}
                                         onChange={(val: string | undefined) => {
+                                            const value = val || '';
+                                            setTestCasesJson(value);
                                             try {
-                                                const parsed = JSON.parse(val || '[]');
-                                                setProblemData({ ...problemData, test_cases: parsed });
+                                                const parsed = JSON.parse(value);
+                                                setProblemData(prev => ({ ...prev, test_cases: parsed }));
                                             } catch (err) { }
                                         }}
                                         options={{ minimap: { enabled: false }, fontSize: 12 }}

@@ -115,7 +115,8 @@ def generate_explanation_questions(problem_data, problem_id, manual_unit=None, a
 
     【任務目標】
     請針對【原始題目資訊】中的「核心運算邏輯」，拆解出一個**子題目（關鍵邏輯片段）**。
-    設計 **1 題** 「程式碼行為解釋 (Behavior Description)」選擇題，選項最多 **3 個**。
+    設計 **1~3 題** 「程式碼行為解釋 (Behavior Description)」選擇題，每題包含最多 **3 個**選項。
+    讓學生找出錯誤原因。每題只能有一個選項正確，正確選項隨機分佈。
     此題旨在讓學生專注理解該原題背後的純程式邏輯或數學轉換，**不需加入任何生活情境包裝**。
 
     **絕對邏輯拆解機制 (Logic Deconstruction Rules)**
