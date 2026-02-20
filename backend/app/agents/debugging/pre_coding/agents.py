@@ -8,12 +8,27 @@ from typing import Dict, Any, List, Tuple
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
+import tiktoken
+
 # Initialize LLM
 llm = ChatOpenAI(
     model="gpt-5.1", 
     temperature=0.3,
     api_key=os.getenv("OPENAI_API_KEY")
 )
+
+MAX_INTENTION_TOKEN_LIMIT = 350
+
+def count_tokens(text: str) -> int:
+    """計算 Token 數量"""
+    try:
+        encoding = tiktoken.encoding_for_model("gpt-4")
+        return len(encoding.encode(text))
+    except Exception:
+        # Fallback approximation: 1 token ~= 1.5 chars for mixed, but safe side 1 char
+        return len(text)
+
+# --- 1. 共用輔助 Agent ---
 
 # --- 1. 共用輔助 Agent ---
 
@@ -22,23 +37,31 @@ class InputFilterAgent:
     負責過濾學生輸入的 Agent。
     """
     @staticmethod
-    async def check(student_input: str) -> bool:
+    async def check(student_input: str) -> Tuple[bool, str]:
         """
-        檢查輸入有效性。只回傳 True/False，後續回應邏輯交由主流程控制。
+        檢查輸入有效性。
+        Returns:
+            (is_valid, reason)
         """
+        # 1. Check Token Limit
+        if count_tokens(student_input) > MAX_INTENTION_TOKEN_LIMIT:
+            return False, f"您的輸入過長 (超過 {MAX_INTENTION_TOKEN_LIMIT} Tokens，約 300 中文字)，請嘗試精簡描述。"
+
         system_prompt = """你是一個對話過濾器。請判斷學生的輸入是否為「無意義內容」或「惡意亂碼」。
 
 【判斷標準】
-- 有效輸入：與程式、邏輯、數學相關，或是表示不知道、請求協助、簡單的問候 (如 "嗨", "你好")。
+- 有效輸入：與程式、邏輯、數學相關，或是表示不知道、請求協助。
 - 無效輸入：
   1. 亂打的鍵盤符號 (如 "asdf", ".....", "123123")
   2. 完全無法理解的亂碼
   3. 顯著的惡意攻擊或髒話
   4. 空白或只有標點符號
+  5. 一般閒聊(如: 天氣、美食、聊天)
 
 請以 JSON 回覆：
 {
-    "is_valid": true/false
+    "is_valid": true/false,
+    "reason": "若無效請簡述理由(15字內)"
 }
 """
         try:
@@ -47,9 +70,11 @@ class InputFilterAgent:
                 HumanMessage(content=f"學生輸入: {student_input}")
             ])
             result = json.loads(response.content)
-            return result.get("is_valid", True)
+            is_valid = result.get("is_valid", True)
+            reason = result.get("reason", "輸入無效，請重新輸入。")
+            return is_valid, reason
         except Exception:
-            return True
+            return True, ""
 
 
 class SuggestionAgent:
@@ -138,23 +163,7 @@ class UnderstandingAgent:
         # 2. 尋找 Agent 上一次的發言 (用於無效輸入時的 Context)
         last_agent_msg = next((msg['content'] for msg in reversed(chat_history) if msg['role'] == 'agent'), "請說明這題的輸入與輸出是什麼？")
 
-        # --- 無效輸入處理邏輯 ---
-        if last_student_msg:
-            is_valid = await InputFilterAgent.check(last_student_msg)
-            
-            if not is_valid:
-                # 若無效：
-                # 1. 取得針對「上一個問題」的建議回覆 (傳入完整歷史供分析)
-                suggested_replies = await SuggestionAgent.generate(last_agent_msg, chat_history, problem_context)
-                
-                # 2. 組合回覆訊息：警告 + 重述問題
-                reply_msg = f"無效輸入請再次作答。\n\n(系統提示：{last_agent_msg})"
-                
-                # 3. 回傳 (分數維持 1 或維持現狀，不推進階段)
-                return reply_msg, 1, False, False, suggested_replies
-        # -----------------------
-
-        # 3. 準備 Prompt 資料 (有效輸入才進入這裡)
+        # 3. 準備 Prompt 資料 (輸入驗證已在 manager.py 中完成)
         history_text = "\n".join([
             f"{'學生' if msg['role'] == 'student' else 'Agent'}: {msg['content']}"
             for msg in chat_history if msg.get('content')
@@ -247,20 +256,8 @@ class DecompositionAgent:
         
         # 2. 尋找 Agent 上一次的發言
         last_agent_msg = next((msg['content'] for msg in reversed(chat_history) if msg['role'] == 'agent'), "請試著列出解題步驟。")
-        
-        # --- 無效輸入處理邏輯 ---
-        if last_student_msg:
-            is_valid = await InputFilterAgent.check(last_student_msg)
-            if not is_valid:
-                # 重新針對上一個問題生成建議
-                suggested_replies = await SuggestionAgent.generate(last_agent_msg, chat_history, problem_context)
-                
-                reply_msg = f"無效輸入請再次作答。\n\n(系統提示：{last_agent_msg})"
-                
-                return reply_msg, 1, False, suggested_replies
-        # -----------------------
 
-        # 3. 準備 Prompt 資料
+        # 3. 準備 Prompt 資料 (輸入驗證已在 manager.py 中完成)
         history_text = "\n".join([
             f"{'學生' if msg['role'] == 'student' else 'Agent'}: {msg['content']}"
             for msg in chat_history if msg.get('content')

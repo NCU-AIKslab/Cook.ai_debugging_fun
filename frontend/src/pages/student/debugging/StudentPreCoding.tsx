@@ -142,6 +142,21 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     const [isSendingChat, setIsSendingChat] = useState(false);
     const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
     const chatContainerRef = useRef<HTMLDivElement>(null);
+    const chatProblemIdRef = useRef<string | null>(null); // 追蹤聊天所屬題目
+    const selectedProblemIdRef = useRef<string | null>(null);
+
+    // 同步更新 ref（必須在 render 期間同步執行）
+    selectedProblemIdRef.current = selectedProblemId;
+
+    // ★ 核心修正：React derived state pattern ★
+    // 當題目切換時，立即清除舊資料（在 paint 之前），防止一閃
+    const [renderedProblemId, setRenderedProblemId] = useState(selectedProblemId);
+    if (renderedProblemId !== selectedProblemId) {
+        setRenderedProblemId(selectedProblemId);
+        setLogicChatState(null);
+        setSuggestedReplies([]);
+        setIsSendingChat(chatProblemIdRef.current === selectedProblemId);
+    }
 
     // IME 狀態 (中文輸入法)
     const [isComposing, setIsComposing] = useState(false);
@@ -211,6 +226,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
             setProblemData(null);
             setLogicChatState(null);
             setSuggestedReplies([]);
+            setIsSendingChat(chatProblemIdRef.current === selectedProblemId);
+            setChatInput('');
             setActiveTab('concept');
 
             // 1. 嘗試從 LocalStorage 恢復回饋紀錄
@@ -234,7 +251,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                 console.warn("左側題目載入失敗", err);
             }
 
-            // 3. 載入 Logic Chat 狀態
+            // 3. 載入 Logic Chat 狀態（一定從後端載入最新資料）
             setPcLoading(true);
             try {
                 const logicRes = await axios.get(`${API_BASE_URL}/debugging/precoding/logic/status/${selectedProblemId}`, {
@@ -291,6 +308,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
         setChatInput('');
         setSuggestedReplies([]);
         setIsSendingChat(true);
+        const requestProblemId = selectedProblemId; // 記錄發送時的題目 ID
+        chatProblemIdRef.current = requestProblemId;
 
         // Optimistic UI update
         setLogicChatState(prev => {
@@ -301,7 +320,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                     ...prev.chat_log,
                     {
                         role: 'student' as const,
-                        content: userMessage,
+                        content: userMessage || '',
                         stage: prev.current_stage,
                         score: prev.current_score,
                         timestamp: new Date().toISOString()
@@ -319,6 +338,9 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
 
             if (res.data.status === 'success') {
                 const data = res.data.data;
+                // 若使用者已切到其他題目，不更新 UI
+                if (selectedProblemIdRef.current !== requestProblemId) return;
+                chatProblemIdRef.current = null; // 清除 in-flight 標記
                 setLogicChatState({
                     status: 'existing',
                     current_stage: data.current_stage,
@@ -345,15 +367,22 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
             }
         } catch (err) {
             console.error("Chat Error:", err);
-            setLogicChatState(prev => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    chat_log: prev.chat_log.slice(0, -1)
-                };
-            });
+            // 只在仍停留同一題時才回滾樂觀訊息
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setLogicChatState(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        chat_log: prev.chat_log.slice(0, -1)
+                    };
+                });
+            }
         } finally {
-            setIsSendingChat(false);
+            chatProblemIdRef.current = null; // 清除 in-flight 標記
+            // 只在仍停留在同一題時才重置 loading
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setIsSendingChat(false);
+            }
         }
     };
 
@@ -762,7 +791,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                         ref={chatContainerRef}
                                                         className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
                                                     >
-                                                        {logicChatState.chat_log.map((msg, idx) => (
+                                                        {Array.isArray(logicChatState.chat_log) && logicChatState.chat_log.map((msg, idx) => (
                                                             <div
                                                                 key={idx}
                                                                 className={`flex ${msg.role === 'student' ? 'justify-end' : 'justify-start'}`}
@@ -771,7 +800,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                                     ? 'bg-blue-500 text-white rounded-br-md'
                                                                     : 'bg-white border border-gray-200 text-gray-800 rounded-bl-md shadow-sm'
                                                                     }`}>
-                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed break-words break-all">{msg.content || ''}</p>
                                                                 </div>
                                                             </div>
                                                         ))}
@@ -792,7 +821,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                     {!logicChatState.is_completed ? (
                                                         <div className="border-t border-gray-200 bg-white">
                                                             {/* Suggested Replies 提示選項 */}
-                                                            {suggestedReplies.length > 0 && (
+                                                            {Array.isArray(suggestedReplies) && suggestedReplies.length > 0 && (
                                                                 <div className="px-4 pt-3 flex flex-wrap gap-2">
                                                                     {suggestedReplies.map((reply, idx) => (
                                                                         <button

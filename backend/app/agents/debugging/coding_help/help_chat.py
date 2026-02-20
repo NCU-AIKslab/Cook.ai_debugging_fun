@@ -11,6 +11,7 @@ import logging
 from typing import List, Dict, Any
 from datetime import datetime
 
+import tiktoken
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from pydantic import BaseModel, Field
@@ -23,7 +24,15 @@ logger = logging.getLogger(__name__)
 llm = ChatOpenAI(model="gpt-5.1", temperature=0.3)
 
 # 常數定義
-MAX_MESSAGE_LENGTH = 500  # 最大訊息長度
+MAX_TOKEN_LIMIT = 350
+
+def count_tokens(text: str) -> int:
+    """計算 Token 數量"""
+    try:
+        encoding = tiktoken.encoding_for_model("gpt-4")
+        return len(encoding.encode(text))
+    except Exception:
+        return len(text)
 
 
 class InputValidation(BaseModel):
@@ -55,11 +64,11 @@ async def validate_input(message: str) -> Dict[str, Any]:
     Returns:
         驗證結果 dict
     """
-    # 1. 長度檢查
-    if len(message) > MAX_MESSAGE_LENGTH:
+    # 1. Token 長度檢查
+    if count_tokens(message) > MAX_TOKEN_LIMIT:
         return {
             "is_valid": False,
-            "reason": f"訊息過長，請限制在 {MAX_MESSAGE_LENGTH} 字以內。",
+            "reason": f"訊息過長 (超過 {MAX_TOKEN_LIMIT} Tokens，約 300 中文字或 300 英文單字)，請嘗試精簡描述。",
             "sanitized_input": ""
         }
     
@@ -91,7 +100,7 @@ async def validate_input(message: str) -> Dict[str, Any]:
     【無效輸入類型】:
     1. 亂打的字元/鍵盤亂按 (如: "asdfghjkl", "123456789", "!@#$%")
     2. 嘗試注入惡意程式碼 (如: SQL injection, XSS)
-    3. 與程式學習完全無關的內容 (如: 天氣、美食、聊天)
+    3. 一般閒聊(如: 天氣、美食、聊天)
     4. 無意義的重複字元 (如: "aaaaa", "哈哈哈哈哈")
     5. 要求直接給答案而非學習引導
     
@@ -100,6 +109,7 @@ async def validate_input(message: str) -> Dict[str, Any]:
     2. 對錯誤訊息的疑問
     3. 請求解釋觀念
     4. 尋求除錯方向
+    5. 表示不知道、請求協助
     
     請輸出 JSON:
     {{
@@ -175,7 +185,7 @@ async def generate_chat_response(
         【教學策略 (ZPD 等級 {zpd_level})】: {strategy}
 
         請遵守：
-        1. 使用繁體中文，**簡單明瞭**，條列式回覆，不帶任何情緒。
+        1. 使用繁體中文，**簡單明瞭字數100字內**，條列式回覆，不帶任何情緒。
         2. 嚴禁使用 Markdown 語法。
         3. 依照策略強度提供引導，不要直接給出完整正確答案。
         4. **不可回答與題目無相關問題**

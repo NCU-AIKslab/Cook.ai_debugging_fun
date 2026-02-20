@@ -3,6 +3,11 @@ import axios from 'axios';
 import Sidebar from '../../../components/student/debugging/Sidebar';
 import { useUser } from '../../../contexts/UserContext';
 import API_BASE_URL from '../../../config/api';
+import Editor from 'react-simple-code-editor';
+// @ts-ignore
+import { highlight, languages } from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/themes/prism-tomorrow.css';
 
 // --- Interfaces ---
 interface ProblemDetail {
@@ -98,9 +103,23 @@ const StudentCodingHelp: React.FC = () => {
     const [isDragging, setIsDragging] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // 用來控制輪詢是否繼續的 Ref
-    const isPollingRef = useRef(false);
+    // ★ 多題並行輪詢架構 ★
+    // activePollingSet: 追蹤哪些題目正在輪詢中（支援多題同時求救）
+    const activePollingSet = useRef<Set<string>>(new Set());
     const isPracticePollingRef = useRef(false);
+    const selectedProblemIdRef = useRef<string | null>(null);
+
+    // 同步更新 ref（render 期間，比 useEffect 更早）
+    selectedProblemIdRef.current = selectedProblemId;
+
+    // ★ React derived state pattern ★
+    // 切題時立即清除舊 UI（paint 之前），根據 activePollingSet 推斷 loading
+    const [renderedProblemId, setRenderedProblemId] = useState(selectedProblemId);
+    if (renderedProblemId !== selectedProblemId) {
+        setRenderedProblemId(selectedProblemId);
+        setChatMessages([]);
+        setIsChatLoading(activePollingSet.current.has(selectedProblemId ?? ''));
+    }
 
     const [canRequestHelp, setCanRequestHelp] = useState(false);
 
@@ -148,7 +167,7 @@ const StudentCodingHelp: React.FC = () => {
     // Cleanup polling on unmount
     useEffect(() => {
         return () => {
-            isPollingRef.current = false;
+            activePollingSet.current.clear();
             isPracticePollingRef.current = false;
         };
     }, []);
@@ -200,9 +219,8 @@ const StudentCodingHelp: React.FC = () => {
             setFeedbackMap({});
 
             setChatMessages([]);
+            setIsChatLoading(activePollingSet.current.has(selectedProblemId));
             setActiveRightTab('editor'); // V3: Reset to editor tab on problem change
-
-            isPollingRef.current = false;
 
             try {
                 const problemRes = await axios.get(`${API_BASE_URL}/debugging/problems/${selectedProblemId}`);
@@ -262,6 +280,41 @@ const StudentCodingHelp: React.FC = () => {
                 } else {
                     setStudentCode("# Write your code here\n");
                 }
+
+                // ★ 切回時自動偵測 help 狀態 ★
+                // 若此題正在背景輪詢中 → 保持 loading（已由 derived state 設定）
+                // 若此題有已完成的 help 結果 → 自動載入
+                if (!data?.is_accepted && data?.submission_num > 0) {
+                    const subNum = data.submission_num || 0;
+                    const repNum = data.latest_report_num || 0;
+                    if (subNum <= repNum && !activePollingSet.current.has(selectedProblemId)) {
+                        // 此提交已有報告，嘗試載入聊天紀錄
+                        try {
+                            const historyRes = await axios.get(
+                                `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`,
+                                { params: { submission_num: subNum } }
+                            );
+                            // 再次確認仍在此題
+                            if (selectedProblemIdRef.current === selectedProblemId) {
+                                const chatLog = historyRes.data.chat_log || [];
+                                if (chatLog.length > 0) {
+                                    const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
+                                        role: msg.role as 'user' | 'agent',
+                                        content: msg.content,
+                                        zpd: msg.zpd,
+                                        timestamp: msg.timestamp,
+                                        type: msg.type
+                                    }));
+                                    setChatMessages(msgs);
+                                    setActiveHelpNum(subNum);
+                                    // 不自動跳到 chatbot tab，讓使用者保持在編碼頁面
+                                }
+                            }
+                        } catch (e) {
+                            // 靜默失敗，不影響主流程
+                        }
+                    }
+                }
             } catch (error) {
                 console.error("Fetch data failed:", error);
             } finally {
@@ -271,60 +324,73 @@ const StudentCodingHelp: React.FC = () => {
         fetchData();
     }, [selectedProblemId, student.stu_id]);
 
-    // 輪詢函式 (Modified: Accept targetNum for snapshot polling)
-    const pollForAnalysisResult = async (targetNum: number, retryCount = 0) => {
-        if (!isPollingRef.current) return;
+    // ★ 每題獨立輪詢函式 ★
+    // forProblemId: 此輪詢所屬的題目（不依賴 closure 或 singleton ref）
+    const pollForAnalysisResult = async (targetNum: number, forProblemId: string, retryCount = 0) => {
+        // 若此題已從 polling set 移除（例如被新的 help request 取代），停止
+        if (!activePollingSet.current.has(forProblemId)) return;
+
         if (retryCount > 60) {
-            setIsChatLoading(false);
-            setChatMessages(prev => [...prev, { role: 'agent', content: "AI 回應逾時，請重新整理或稍後再試。", type: 'chat' }]);
-            isPollingRef.current = false;
-            // Allow retry
-            setCanRequestHelp(true);
+            activePollingSet.current.delete(forProblemId);
+            if (selectedProblemIdRef.current === forProblemId) {
+                setIsChatLoading(false);
+                setChatMessages(prev => [...prev, { role: 'agent', content: "AI 回應逾時，請重新整理或稍後再試。", type: 'chat' }]);
+                setCanRequestHelp(true);
+            }
             return;
         }
 
         try {
-            // V3: Pass submission_num to backend to poll STATUS of that specific submission
             const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId,
+                problem_id: forProblemId,
                 submission_num: targetNum
             });
 
+            // 輪詢期間可能已被取消
+            if (!activePollingSet.current.has(forProblemId)) return;
+
             const { status, reply, chat_log } = initRes.data;
+            const isViewing = selectedProblemIdRef.current === forProblemId;
 
             if (status === 'resumed') {
-                // 優先使用 chat_log，若無則使用 reply
-                if (chat_log && chat_log.length > 0) {
-                    const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
-                        role: msg.role as 'user' | 'agent',
-                        content: msg.content,
-                        zpd: msg.zpd,
-                        timestamp: msg.timestamp,
-                        type: msg.type
-                    }));
-                    setChatMessages(msgs);
-                } else if (reply) {
-                    setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                activePollingSet.current.delete(forProblemId);
+                if (isViewing) {
+                    if (chat_log && chat_log.length > 0) {
+                        const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                            role: msg.role as 'user' | 'agent',
+                            content: msg.content,
+                            zpd: msg.zpd,
+                            timestamp: msg.timestamp,
+                            type: msg.type
+                        }));
+                        setChatMessages(msgs);
+                    } else if (reply) {
+                        setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                    }
+                    setIsChatLoading(false);
                 }
-                setIsChatLoading(false);
-                isPollingRef.current = false;
+                // 不在此題 → 結果留在後端，切回時 fetchData 會載入
             } else if (status === 'pending' || status === 'started') {
-                setTimeout(() => pollForAnalysisResult(targetNum, retryCount + 1), 2000);
+                // 繼續輪詢（不管使用者在看哪題）
+                setTimeout(() => pollForAnalysisResult(targetNum, forProblemId, retryCount + 1), 2000);
             } else {
-                setIsChatLoading(false);
-                if (status === 'no_report') {
-                    setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
-                    // No report found, maybe allow requesting again?
+                activePollingSet.current.delete(forProblemId);
+                if (isViewing) {
+                    setIsChatLoading(false);
+                    if (status === 'no_report') {
+                        setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
+                    }
                 }
-                isPollingRef.current = false;
             }
         } catch (error) {
             console.error("Polling error:", error);
-            setIsChatLoading(false);
-            setChatMessages(prev => [...prev, { role: 'agent', content: "請於「程式編碼」分頁提交程式碼。", type: 'chat' }]);
-            isPollingRef.current = false;
-            setCanRequestHelp(true);
+            activePollingSet.current.delete(forProblemId);
+            if (selectedProblemIdRef.current === forProblemId) {
+                setIsChatLoading(false);
+                setChatMessages(prev => [...prev, { role: 'agent', content: "請於「程式編碼」分頁提交程式碼。", type: 'chat' }]);
+                setCanRequestHelp(true);
+            }
         }
     };
 
@@ -383,55 +449,58 @@ const StudentCodingHelp: React.FC = () => {
     const handleRequestHelp = async () => {
         if (!canRequestHelp || isChatLoading || !selectedProblemId || timeStatus !== 'active') return;
 
-        setCanRequestHelp(false); // Lock button
+        const requestProblemId = selectedProblemId;
+        setCanRequestHelp(false);
         setIsChatLoading(true);
-
-        // Clear view for new analysis as per requirement
         setChatMessages([]);
 
-        // V3: Lock to the current submission num for this help session
         const helpNum = latestSubmissionNum;
         setActiveHelpNum(helpNum);
 
         try {
-            // V2: Snapshot Analysis - Lock to latestSubmissionNum
             const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId,
+                problem_id: requestProblemId,
                 force_refresh: true,
                 submission_num: helpNum
             });
 
+            const isViewing = selectedProblemIdRef.current === requestProblemId;
             const { status, chat_log, reply } = initRes.data;
 
             if (status === 'resumed') {
-                // 已有對話紀錄 -> 直接顯示
-                if (chat_log && chat_log.length > 0) {
-                    const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
-                        role: msg.role as 'user' | 'agent',
-                        content: msg.content,
-                        zpd: msg.zpd,
-                        timestamp: msg.timestamp,
-                        type: msg.type
-                    }));
-                    setChatMessages(msgs);
-                } else if (reply) {
-                    setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                if (isViewing) {
+                    if (chat_log && chat_log.length > 0) {
+                        const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                            role: msg.role as 'user' | 'agent',
+                            content: msg.content,
+                            zpd: msg.zpd,
+                            timestamp: msg.timestamp,
+                            type: msg.type
+                        }));
+                        setChatMessages(msgs);
+                    } else if (reply) {
+                        setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                    }
+                    setIsChatLoading(false);
                 }
-                setIsChatLoading(false);
             } else if (status === 'started' || status === 'pending') {
-                // 分析已觸發或處理中 -> 開始輪詢
-                isPollingRef.current = true;
-                pollForAnalysisResult(helpNum);
+                // 加入 polling set 並開始獨立輪詢
+                activePollingSet.current.add(requestProblemId);
+                pollForAnalysisResult(helpNum, requestProblemId);
             } else {
-                setChatMessages([{ role: 'agent', content: "目前無錯誤報告。", type: 'chat' }]);
-                setIsChatLoading(false);
+                if (isViewing) {
+                    setChatMessages([{ role: 'agent', content: "目前無錯誤報告。", type: 'chat' }]);
+                    setIsChatLoading(false);
+                }
             }
         } catch (error) {
             console.error("Request help failed:", error);
-            setChatMessages([{ role: 'agent', content: "請求失敗，請稍後再試。", type: 'chat' }]);
-            setIsChatLoading(false);
-            setCanRequestHelp(true); // Re-enable on error
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setChatMessages([{ role: 'agent', content: "請求失敗，請稍後再試。", type: 'chat' }]);
+                setIsChatLoading(false);
+                setCanRequestHelp(true);
+            }
         }
     };
 
@@ -446,11 +515,14 @@ const StudentCodingHelp: React.FC = () => {
 
         // V3: When switching to chatbot tab, load existing chat history
         if (tab === 'chatbot' && chatMessages.length === 0 && !isChatLoading) {
+            const tabProblemId = selectedProblemId;
             try {
                 const historyRes = await axios.get(
-                    `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`,
+                    `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${tabProblemId}`,
                     { params: { submission_num: latestSubmissionNum || undefined } }
                 );
+                // 守衛：API 期間可能已切題
+                if (selectedProblemIdRef.current !== tabProblemId) return;
                 const chatLog = historyRes.data.chat_log || [];
                 if (chatLog.length > 0) {
                     const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
@@ -543,10 +615,11 @@ const StudentCodingHelp: React.FC = () => {
         }
     };
 
-    // 4. Chat Send (保持不變)
+    // 4. Chat Send
     const handleSendChat = async () => {
         if (!chatInput.trim() || isChatLoading || !selectedProblemId || timeStatus !== 'active') return;
         const userMsg = chatInput;
+        const requestProblemId = selectedProblemId; // 捕獲當前題目
         setChatInput("");
         setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
         setIsChatLoading(true);
@@ -555,15 +628,20 @@ const StudentCodingHelp: React.FC = () => {
             // V3: Send activeHelpNum so backend saves to the correct dialogue
             const res = await axios.post(`${API_BASE_URL}/debugging/help/chat`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId,
+                problem_id: requestProblemId, // 使用捕獲值，非 closure
                 message: userMsg,
                 submission_num: activeHelpNum
             });
+            // 守衛：若已切題則不更新 UI
+            if (selectedProblemIdRef.current !== requestProblemId) return;
             setChatMessages(prev => [...prev, { role: 'agent', content: res.data.reply, type: 'chat' }]);
         } catch (error) {
+            if (selectedProblemIdRef.current !== requestProblemId) return;
             setChatMessages(prev => [...prev, { role: 'agent', content: "發生錯誤，請稍後再試。", type: 'chat' }]);
         } finally {
-            setIsChatLoading(false);
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setIsChatLoading(false);
+            }
         }
     };
 
@@ -726,14 +804,25 @@ const StudentCodingHelp: React.FC = () => {
                         <div className="flex-1 relative overflow-hidden flex flex-col">
                             {activeRightTab === 'editor' && (
                                 <>
-                                    <div className="flex-1 relative bg-[#1e1e1e]">
-                                        <textarea
-                                            className={`w-full h-full bg-[#1e1e1e] text-gray-300 font-mono text-sm p-4 outline-none resize-none border-none focus:ring-0 whitespace-pre overflow-auto ${(isAccepted || !isProblemSelected || timeStatus !== 'active') ? 'cursor-not-allowed opacity-80' : ''}`}
+                                    <div className="flex-1 relative bg-[#1e1e1e] overflow-auto">
+                                        <Editor
                                             value={studentCode}
-                                            onChange={(e) => (!isAccepted && isProblemSelected && timeStatus === 'active') && setStudentCode(e.target.value)}
-                                            spellCheck={false}
+                                            onValueChange={(code) => (!isAccepted && isProblemSelected && timeStatus === 'active') && setStudentCode(code)}
+                                            highlight={(code) => highlight(code, languages.python, 'python')}
+                                            padding={16}
                                             readOnly={isAccepted || !isProblemSelected || timeStatus !== 'active'}
-                                            placeholder={!isProblemSelected ? "請先從左側選擇題目..." : timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "考試時間已結束，無法作答。" : ""}
+                                            placeholder={!isProblemSelected ? "請先從左側選擇題目..." : timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "考試時間已結束，無法作答。" : "# Write your code here\n"}
+                                            tabSize={4}
+                                            insertSpaces={true}
+                                            style={{
+                                                fontFamily: '"Fira Code", "Fira Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
+                                                fontSize: 14,
+                                                lineHeight: 1.6,
+                                                minHeight: '100%',
+                                                backgroundColor: '#1e1e1e',
+                                                color: '#d4d4d4',
+                                            }}
+                                            className={`${(isAccepted || !isProblemSelected || timeStatus !== 'active') ? 'cursor-not-allowed opacity-80' : ''}`}
                                         />
                                         {isAccepted && <div className="absolute top-4 right-4 bg-green-600 text-white px-3 py-1 text-xs rounded shadow opacity-90">Accepted (Read Only)</div>}
                                         {timeStatus === 'ended' && !isAccepted && <div className="absolute top-4 right-4 bg-red-600 text-white px-3 py-1 text-xs rounded shadow opacity-90">Time's Up (Locked)</div>}
@@ -759,7 +848,6 @@ const StudentCodingHelp: React.FC = () => {
                                             <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-4">
                                                 {isAccepted ? (
                                                     <div className="bg-green-50 border border-green-200 p-6 rounded-lg text-green-800 text-center animate-fadeIn shadow-sm">
-                                                        <div className="text-4xl mb-3">🎉</div>
                                                         <h3 className="text-lg font-bold mb-1">程式正確請前往練習題頁面</h3>
                                                     </div>
                                                 ) : (
@@ -779,7 +867,7 @@ const StudentCodingHelp: React.FC = () => {
                                         )}
                                         {!isAccepted && chatMessages.map((msg, idx) => (
                                             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                                <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
+                                                <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap break-words break-all ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
                                                     {msg.role === 'agent' && <div className="text-xs font-bold text-blue-600 mb-1">System</div>}
                                                     {msg.content}
                                                 </div>
@@ -880,7 +968,7 @@ const StudentCodingHelp: React.FC = () => {
                                                 const isLocked = feedbackMap[qId];
 
                                                 return (
-                                                    <div key={qId} className={`bg-white border rounded-xl shadow-sm overflow-hidden transition-all ${isLocked ? 'border-green-200 ring-1 ring-green-100 opacity-80' : 'border-gray-200'}`}>
+                                                    <div key={qId} className={`bg-white border rounded-xl shadow-sm overflow-hidden transition-all ${isLocked ? 'bg-green-50 border-green-200 shadow-sm' : 'border-gray-200'}`}>
                                                         <div className={`p-5 border-b border-gray-100 ${isLocked ? 'bg-green-50' : 'bg-gray-50'}`}>
                                                             <div className="flex justify-between items-start">
                                                                 <div className="flex space-x-3">
@@ -908,9 +996,11 @@ const StudentCodingHelp: React.FC = () => {
 
                                                                 if (isLocked) {
                                                                     if (isCorrectOption) {
-                                                                        containerClass = "border-green-500 bg-green-50 ring-1 ring-green-500 cursor-default";
+                                                                        containerClass = "bg-green-600 text-white border-green-600 font-medium cursor-default";
+                                                                    } else if (isSelected) {
+                                                                        containerClass = "bg-red-300 text-white border-red-300 font-medium cursor-not-allowed";
                                                                     } else {
-                                                                        containerClass = "border-gray-100 opacity-50 cursor-not-allowed";
+                                                                        containerClass = "bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed opacity-50";
                                                                     }
                                                                 } else {
                                                                     if (isSelected) {
@@ -928,13 +1018,13 @@ const StudentCodingHelp: React.FC = () => {
                                                                             className={`flex items-start p-4 rounded-lg border transition-all ${containerClass} ${isLocked ? '' : 'cursor-pointer'}`}
                                                                             onClick={() => !isLocked && handleOptionSelect(qId, opt.id, item.answer_config.correct_id)}
                                                                         >
-                                                                            <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center mr-3 shrink-0 ${(isLocked && isCorrectOption) || (isSelected && isCorrectOption) ? 'border-green-600' : isSelected ? 'border-red-500' : 'border-gray-400'}`}>
+                                                                            <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center mr-3 shrink-0 ${(isLocked && isCorrectOption) ? 'border-white' : (isLocked && isSelected) ? 'border-white' : (isSelected && isCorrectOption) ? 'border-green-600' : isSelected ? 'border-red-500' : 'border-gray-400'}`}>
                                                                                 {((isLocked && isCorrectOption) || isSelected) && (
-                                                                                    <div className={`w-2 h-2 rounded-full ${(isLocked && isCorrectOption) || (isSelected && isCorrectOption) ? 'bg-green-600' : 'bg-red-500'}`}></div>
+                                                                                    <div className={`w-2 h-2 rounded-full ${(isLocked && isCorrectOption) ? 'bg-white' : (isLocked && isSelected) ? 'bg-white' : (isSelected && isCorrectOption) ? 'bg-green-600' : 'bg-red-500'}`}></div>
                                                                                 )}
                                                                             </div>
                                                                             <div className="flex-1">
-                                                                                <span className={`text-sm font-medium ${isLocked && !isCorrectOption ? 'text-gray-400' : 'text-gray-700'}`}>{opt.label}</span>
+                                                                                <span className={`text-sm font-medium ${isLocked && isCorrectOption ? 'text-white' : isLocked && isSelected ? 'text-white' : isLocked ? 'text-gray-400' : 'text-gray-700'}`}>{opt.label}</span>
                                                                             </div>
                                                                         </label>
                                                                         {isLocked && isCorrectOption && (
