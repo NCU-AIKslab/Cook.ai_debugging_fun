@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # 初始化 LLM (增加逾時與重試設定以提升穩定性)
 llm = ChatOpenAI(model="gpt-5.1", temperature=0.3, request_timeout=120, max_retries=3)
+llm2 = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, request_timeout=120, max_retries=3)
 
 
 class ErrorReport(BaseModel):
@@ -155,7 +156,7 @@ async def determine_zpd_level(
     """
     
     try:
-        response = await llm.ainvoke([
+        response = await llm2.ainvoke([
             SystemMessage(content="你是教育心理學專家。請只輸出 JSON。"),
             HumanMessage(content=prompt)
         ])

@@ -719,7 +719,7 @@ const StudentCodingHelp: React.FC = () => {
                         </button>
                         <h2 className="font-bold text-gray-800 flex items-center gap-2">
                             {problemData?.title || '請選擇題目'}
-                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">考試結束 (Time's Up)</span>}
+                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">Time's Up</span>}
                             {timeStatus === 'not_started' && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded border border-yellow-200">未開始 (Not Started)</span>}
                         </h2>
                     </div>
@@ -811,7 +811,7 @@ const StudentCodingHelp: React.FC = () => {
                                             highlight={(code) => highlight(code, languages.python, 'python')}
                                             padding={16}
                                             readOnly={isAccepted || !isProblemSelected || timeStatus !== 'active'}
-                                            placeholder={!isProblemSelected ? "請先從左側選擇題目..." : timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "考試時間已結束，無法作答。" : "# Write your code here\n"}
+                                            placeholder={!isProblemSelected ? "請先從左側選擇題目..." : timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "時間已結束，無法作答。" : "# Write your code here\n"}
                                             tabSize={4}
                                             insertSpaces={true}
                                             style={{

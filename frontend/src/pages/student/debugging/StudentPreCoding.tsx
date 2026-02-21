@@ -626,7 +626,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                         </button>
                         <h2 className="font-bold text-gray-800 flex items-center gap-2">
                             {problemData?.title || '請選擇題目'}
-                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">考試結束 (Time's Up)</span>}
+                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">Time's Up</span>}
                             {timeStatus === 'not_started' && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded border border-yellow-200">未開始 (Not Started)</span>}
                         </h2>
                     </div>
@@ -846,7 +846,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                                     onCompositionEnd={() => {
                                                                         setIsComposing(false);
                                                                     }}
-                                                                    placeholder={timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "考試時間已結束。" : "輸入您的回答..."}
+                                                                    placeholder={timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "時間已結束" : "輸入您的回答..."}
                                                                     className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                                     rows={2}
                                                                     disabled={isSendingChat || timeStatus !== 'active'}

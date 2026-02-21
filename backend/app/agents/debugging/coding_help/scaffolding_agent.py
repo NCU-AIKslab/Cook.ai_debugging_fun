@@ -44,6 +44,7 @@ class DocumentChunk(Base):
 
 # 初始化 LLM (增加逾時與重試設定以提升穩定性)
 llm = ChatOpenAI(model="gpt-5.1", temperature=0.3, request_timeout=120, max_retries=3)
+llm2 = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, request_timeout=120, max_retries=3)
 embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 
 
@@ -117,7 +118,7 @@ async def decide_retrieval(
     """
     
     try:
-        response = await llm.ainvoke([
+        response = await llm2.ainvoke([
             SystemMessage(content="你是教學資源規劃專家。請只輸出 JSON。"),
             HumanMessage(content=prompt)
         ])

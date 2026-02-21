@@ -16,6 +16,7 @@ llm = ChatOpenAI(
     temperature=0.3,
     api_key=os.getenv("OPENAI_API_KEY")
 )
+llm2 = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, api_key=os.getenv("OPENAI_API_KEY"))
 
 MAX_INTENTION_TOKEN_LIMIT = 350
 
@@ -65,7 +66,7 @@ class InputFilterAgent:
 }
 """
         try:
-            response = await llm.ainvoke([
+            response = await llm2.ainvoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=f"學生輸入: {student_input}")
             ])
@@ -119,6 +120,8 @@ class SuggestionAgent:
 - 回覆簡潔明瞭，不超過 15 字
 - 不要包含多餘的標點符號
 - 不要包含多餘的空行
+- 選項內容不要重複
+- 內容須正確
 
 請以 JSON 回覆：
 {{

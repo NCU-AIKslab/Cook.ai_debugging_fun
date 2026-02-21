@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # 初始化 LLM
 llm = ChatOpenAI(model="gpt-5.1", temperature=0.3)
-
+llm2 = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
 # 常數定義
 MAX_TOKEN_LIMIT = 350
 
@@ -119,7 +119,7 @@ async def validate_input(message: str) -> Dict[str, Any]:
     """
     
     try:
-        response = await llm.ainvoke([
+        response = await llm2.ainvoke([
             SystemMessage(content="你是輸入驗證專家。請只輸出 JSON。"),
             HumanMessage(content=prompt)
         ])
