@@ -887,7 +887,9 @@ async def chat_with_agent(payload: ChatRequest):
             zpd_level=zpd_val,
             evidence_report=context_report,
             problem_info=problem_info,
-            chat_log=existing_chat_log
+            chat_log=existing_chat_log,
+            student_id=payload.student_id,
+            problem_id=payload.problem_id,
         )
         
         # 5. 檢查輸入驗證結果

@@ -4,11 +4,12 @@ Pre-Coding Agents Module
 
 import os
 import json
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
 import tiktoken
+from backend.app.agents.debugging.db import save_llm_charge
 
 # Initialize LLM
 llm = ChatOpenAI(
@@ -38,7 +39,7 @@ class InputFilterAgent:
     負責過濾學生輸入的 Agent。
     """
     @staticmethod
-    async def check(student_input: str) -> Tuple[bool, str]:
+    async def check(student_input: str, student_id: str = None, problem_id: str = None) -> Tuple[bool, str]:
         """
         檢查輸入有效性。
         Returns:
@@ -70,6 +71,19 @@ class InputFilterAgent:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=f"學生輸入: {student_input}")
             ])
+            # 記錄 token 用量
+            if student_id:
+                usage = response.response_metadata.get("token_usage", {})
+                details = usage.get("prompt_tokens_details") or {}
+                save_llm_charge(
+                    student_id=student_id,
+                    usage_type="intention",
+                    model_name="gpt-4o-mini",
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    cached_input_tokens=details.get("cached_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                    problem_id=problem_id,
+                )
             result = json.loads(response.content)
             is_valid = result.get("is_valid", True)
             reason = result.get("reason", "輸入無效，請重新輸入。")
@@ -87,7 +101,9 @@ class SuggestionAgent:
     async def generate(
         agent_last_question: str,
         chat_history: List[Dict[str, Any]],
-        problem_context: Dict[str, Any]
+        problem_context: Dict[str, Any],
+        student_id: str = None,
+        problem_id: str = None,
     ) -> List[str]:
         
         # 1. 整理歷史紀錄為文本
@@ -133,6 +149,19 @@ class SuggestionAgent:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content="請根據學生歷史狀態與當前問題，生成建議回答")
             ])
+            # 記錄 token 用量
+            if student_id:
+                usage = response.response_metadata.get("token_usage", {})
+                details = usage.get("prompt_tokens_details") or {}
+                save_llm_charge(
+                    student_id=student_id,
+                    usage_type="intention",
+                    model_name="gpt-5.1",
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    cached_input_tokens=details.get("cached_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                    problem_id=problem_id,
+                )
             result = json.loads(response.content)
             return result.get("options", [])
         except Exception:
@@ -157,7 +186,9 @@ class UnderstandingAgent:
     @staticmethod
     async def evaluate(
         chat_history: List[Dict[str, Any]],
-        problem_context: Dict[str, Any]
+        problem_context: Dict[str, Any],
+        student_id: str = None,
+        problem_id: str = None,
     ) -> Tuple[str, int, bool, bool, List[str]]:
         
         # 1. 提取最新學生輸入
@@ -217,6 +248,19 @@ class UnderstandingAgent:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content="請根據以上對話歷史進行評估")
             ])
+            # 記錄 token 用量
+            if student_id:
+                usage = response.response_metadata.get("token_usage", {})
+                details = usage.get("prompt_tokens_details") or {}
+                save_llm_charge(
+                    student_id=student_id,
+                    usage_type="intention",
+                    model_name="gpt-5.1",
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    cached_input_tokens=details.get("cached_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                    problem_id=problem_id,
+                )
             
             result = json.loads(response.content)
             
@@ -226,7 +270,10 @@ class UnderstandingAgent:
             should_transition = score >= 4
             
             # 5. 針對「Agent 這次產生的新回覆」生成建議選項
-            suggested_replies = await SuggestionAgent.generate(agent_reply, chat_history, problem_context)
+            suggested_replies = await SuggestionAgent.generate(
+                agent_reply, chat_history, problem_context,
+                student_id=student_id, problem_id=problem_id
+            )
             
             return agent_reply, score, should_transition, has_decomposition, suggested_replies
             
@@ -251,7 +298,9 @@ class DecompositionAgent:
     @staticmethod
     async def evaluate(
         chat_history: List[Dict[str, Any]],
-        problem_context: Dict[str, Any]
+        problem_context: Dict[str, Any],
+        student_id: str = None,
+        problem_id: str = None,
     ) -> Tuple[str, int, bool, List[str]]:
         
         # 1. 提取最新學生輸入
@@ -313,15 +362,31 @@ class DecompositionAgent:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content="請根據以上對話歷史進行評估")
             ])
+            # 記錄 token 用量
+            if student_id:
+                usage = response.response_metadata.get("token_usage", {})
+                details = usage.get("prompt_tokens_details") or {}
+                save_llm_charge(
+                    student_id=student_id,
+                    usage_type="intention",
+                    model_name="gpt-5.1",
+                    input_tokens=usage.get("prompt_tokens", 0),
+                    cached_input_tokens=details.get("cached_tokens", 0),
+                    output_tokens=usage.get("completion_tokens", 0),
+                    problem_id=problem_id,
+                )
             
             result = json.loads(response.content)
             
-            agent_reply = result.get("reply", "請試著列出解決這題需要的步驟")
+            agent_reply = result.get("reply", "請試著列出解決這題需要哪些步驟")
             score = min(4, max(1, int(result.get("score", 1))))
             is_complete = score >= 4
             
             # 5. 針對新回覆生成建議
-            suggested_replies = await SuggestionAgent.generate(agent_reply, chat_history, problem_context)
+            suggested_replies = await SuggestionAgent.generate(
+                agent_reply, chat_history, problem_context,
+                student_id=student_id, problem_id=problem_id
+            )
             
             return agent_reply, score, is_complete, suggested_replies
             

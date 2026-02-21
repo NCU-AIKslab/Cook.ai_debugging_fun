@@ -144,7 +144,8 @@ class GenerateRequest(BaseModel):
 def generate_content(
     problem_id: str, 
     gen_type: str = Path(..., regex="^(explanation|debugging|architecture)$"),
-    request_body: GenerateRequest = None
+    request_body: GenerateRequest = None,
+    student_id: str = Query(default="teacher", description="記錄追蹤用的使用者 ID"),
 ):
     """
     Trigger generation for a specific type.
@@ -179,17 +180,26 @@ def generate_content(
         target_column = ""
         
         if gen_type == "explanation":
-            result = generate_explanation_questions(problem_data, problem_id, manual_unit=core_concept, allowed_concepts=allowed_concepts)
+            result = generate_explanation_questions(
+                problem_data, problem_id,
+                manual_unit=core_concept, allowed_concepts=allowed_concepts,
+                student_id=student_id,
+            )
             target_column = "explain_code_question"
         elif gen_type == "debugging":
-            result = generate_debugging_questions(problem_data, problem_id, manual_unit=core_concept, allowed_concepts=allowed_concepts)
+            result = generate_debugging_questions(
+                problem_data, problem_id,
+                manual_unit=core_concept, allowed_concepts=allowed_concepts,
+                student_id=student_id,
+            )
             target_column = "error_code_question"
         elif gen_type == "architecture":
-             result = generate_architecture_questions(problem_data, problem_id, manual_unit=core_concept, allowed_concepts=allowed_concepts)
-             # Note: generate_architecture_questions returns a dict string or dict?
-             # My implementation returns a dict (model_dump()).
-             # Wait, code_architecture.py returns `completion.choices[0].message.parsed.model_dump()`.
-             target_column = "correct_code_template"
+            result = generate_architecture_questions(
+                problem_data, problem_id,
+                manual_unit=core_concept, allowed_concepts=allowed_concepts,
+                student_id=student_id,
+            )
+            target_column = "correct_code_template"
         
         if result is None:
              raise HTTPException(status_code=500, detail="Generation failed (returned None).")

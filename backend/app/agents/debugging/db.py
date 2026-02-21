@@ -2,7 +2,7 @@ import os
 import json
 import atexit
 from sqlalchemy import (
-    create_engine, MetaData, Table, Column, String, Integer, DateTime, Boolean,
+    create_engine, MetaData, Table, Column, String, Integer, Float, DateTime, Boolean,
     select, insert, update, and_, func, desc
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -227,7 +227,130 @@ practice_table = Table(
 )
 
 # ==========================================
-# 4. Users Tables (驗證系統)
+# 4. LLM Charge Tables (Token 費用追蹤)
+# ==========================================
+
+# 模型定價表（每 1M tokens，USD）
+LLM_PRICING = {
+    "gpt-5.1":      {"input": 1.25,  "cached_input": 0.125, "output": 10.00},
+    "gpt-4o-mini":  {"input": 0.40,  "cached_input": 0.10,  "output": 1.60},
+    # Fallback for unknown models
+    "default":      {"input": 1.25,  "cached_input": 0.125, "output": 10.00},
+}
+
+llm_charge_table = Table(
+    "llm_charge",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("student_id", String(50), nullable=False),
+    Column("problem_id", String(50), nullable=True),
+    Column("usage_type", String(50), nullable=False),  # problem_generate / intention / code_correction / practice
+    Column("model_name", String(50)),
+    Column("input_tokens", Integer, default=0),
+    Column("cached_input_tokens", Integer, default=0),
+    Column("output_tokens", Integer, default=0),
+    Column("total_tokens", Integer, default=0),
+    Column("input_cost", Float, default=0.0),
+    Column("cached_input_cost", Float, default=0.0),
+    Column("output_cost", Float, default=0.0),
+    Column("total_cost", Float, default=0.0),
+    Column("created_at", DateTime, server_default=func.now()),
+    schema="debugging",
+    extend_existing=True,
+)
+
+
+def save_llm_charge(
+    student_id: str,
+    usage_type: str,
+    model_name: str,
+    input_tokens: int,
+    output_tokens: int,
+    cached_input_tokens: int = 0,
+    problem_id: str = None,
+):
+    """
+    計算 LLM 費用並寫入 llm_charge 資料表。
+    usage_type: 'problem_generate' | 'intention' | 'code_correction' | 'practice'
+    """
+    pricing = LLM_PRICING.get(model_name, LLM_PRICING["default"])
+    input_cost        = input_tokens        / 1_000_000 * pricing["input"]
+    cached_input_cost = cached_input_tokens / 1_000_000 * pricing["cached_input"]
+    output_cost       = output_tokens       / 1_000_000 * pricing["output"]
+    total_tokens      = input_tokens + cached_input_tokens + output_tokens
+    total_cost        = input_cost + cached_input_cost + output_cost
+
+    try:
+        with engine.begin() as conn:
+            # 1. 查詢是否有符合條件的既有記錄
+            if problem_id is not None:
+                # 有 problem_id → 四欄全比對
+                stmt = select(llm_charge_table.c.id).where(
+                    and_(
+                        llm_charge_table.c.student_id == student_id,
+                        llm_charge_table.c.problem_id == problem_id,
+                        llm_charge_table.c.usage_type == usage_type,
+                        llm_charge_table.c.model_name == model_name,
+                    )
+                ).limit(1)
+            else:
+                # 無 problem_id → 三欄比對，且 problem_id IS NULL
+                stmt = select(llm_charge_table.c.id).where(
+                    and_(
+                        llm_charge_table.c.student_id == student_id,
+                        llm_charge_table.c.problem_id == None,
+                        llm_charge_table.c.usage_type == usage_type,
+                        llm_charge_table.c.model_name == model_name,
+                    )
+                ).limit(1)
+
+            existing = conn.execute(stmt).fetchone()
+
+            if existing:
+                # 2a. 找到 → 累加
+                conn.execute(
+                    update(llm_charge_table).where(
+                        llm_charge_table.c.id == existing.id
+                    ).values(
+                        input_tokens=llm_charge_table.c.input_tokens + input_tokens,
+                        cached_input_tokens=llm_charge_table.c.cached_input_tokens + cached_input_tokens,
+                        output_tokens=llm_charge_table.c.output_tokens + output_tokens,
+                        total_tokens=llm_charge_table.c.total_tokens + total_tokens,
+                        input_cost=llm_charge_table.c.input_cost + input_cost,
+                        cached_input_cost=llm_charge_table.c.cached_input_cost + cached_input_cost,
+                        output_cost=llm_charge_table.c.output_cost + output_cost,
+                        total_cost=llm_charge_table.c.total_cost + total_cost,
+                    )
+                )
+                action = "accumulated"
+            else:
+                # 2b. 沒找到 → 新增
+                conn.execute(insert(llm_charge_table).values(
+                    student_id=student_id,
+                    problem_id=problem_id,
+                    usage_type=usage_type,
+                    model_name=model_name,
+                    input_tokens=input_tokens,
+                    cached_input_tokens=cached_input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                    input_cost=input_cost,
+                    cached_input_cost=cached_input_cost,
+                    output_cost=output_cost,
+                    total_cost=total_cost,
+                ))
+                action = "inserted"
+
+        print(f"[LLM Charge] {action} | {usage_type} | {model_name} | "
+              f"tokens: in={input_tokens}, cached={cached_input_tokens}, out={output_tokens} | "
+              f"cost: ${total_cost:.6f}")
+    except Exception as e:
+        print(f"[LLM Charge] Warning: Failed to save charge record: {e}")
+
+
+
+# ==========================================
+# 5. Users Tables (驗證系統)
 # ==========================================
 
 # 4a. Cooklogin DB - users table (Google login)

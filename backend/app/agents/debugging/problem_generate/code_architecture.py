@@ -3,6 +3,7 @@ import json
 from typing import List
 from pydantic import BaseModel, Field
 from openai import OpenAI
+from backend.app.agents.debugging.db import save_llm_charge
 
 # ================= 1. 設定與常數 =================
 
@@ -32,7 +33,7 @@ def get_unit_from_id(problem_id: str) -> str:
         return problem_id.split("_")[0]
     return "C1"
 
-def generate_architecture_questions(problem_data, problem_id, manual_unit=None, allowed_concepts=None):
+def generate_architecture_questions(problem_data, problem_id, manual_unit=None, allowed_concepts=None, student_id=None):
     # Expecting problem_data to have solution_code at the end
     if len(problem_data) == 6:
         title, desc, in_desc, out_desc, samples, solution_code = problem_data
@@ -110,7 +111,21 @@ def generate_architecture_questions(problem_data, problem_id, manual_unit=None, 
             response_format=ArchitectureQuestion,
             temperature=0.2,
         )
-        return completion.choices[0].message.parsed.model_dump() # Return dict
+        parsed = completion.choices[0].message.parsed
+        # 記錄 token 用量
+        if student_id and completion.usage:
+            usage = completion.usage
+            cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="problem_generate",
+                model_name="gpt-5.1",
+                input_tokens=usage.prompt_tokens,
+                cached_input_tokens=cached,
+                output_tokens=usage.completion_tokens,
+                problem_id=problem_id,
+            )
+        return parsed.model_dump()  # Return dict
     except Exception as e:
         print(f"  ❌ AI 生成失敗: {e}")
         return None

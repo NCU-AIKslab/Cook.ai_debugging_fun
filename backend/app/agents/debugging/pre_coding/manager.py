@@ -165,7 +165,9 @@ class PreCodingManager:
         problem_info = get_problem_by_id(problem_id) or {}
         
         # --- 輸入驗證：無效輸入不記錄到 DB，但前端仍顯示 ---
-        is_valid, reason = await InputFilterAgent.check(message)
+        is_valid, reason = await InputFilterAgent.check(
+            message, student_id=student_id, problem_id=problem_id
+        )
         if not is_valid:
             # 建立臨時 chat_log（僅供前端顯示，不寫入 DB）
             now = datetime.now(timezone.utc)
@@ -214,7 +216,8 @@ class PreCodingManager:
         
         if current_stage == "UNDERSTANDING":
             reply, score, should_transition, has_decomposition, suggested_replies = await UnderstandingAgent.evaluate(
-                chat_log, problem_info
+                chat_log, problem_info,
+                student_id=student_id, problem_id=problem_id
             )
             agent_reply = reply
             new_score = max(current_score, score)  # Score can only go up
@@ -239,7 +242,8 @@ class PreCodingManager:
                     
         elif current_stage == "DECOMPOSITION":
             reply, score, is_stage_complete, suggested_replies = await DecompositionAgent.evaluate(
-                chat_log, problem_info
+                chat_log, problem_info,
+                student_id=student_id, problem_id=problem_id
             )
             agent_reply = reply
             new_score = max(current_score, score)

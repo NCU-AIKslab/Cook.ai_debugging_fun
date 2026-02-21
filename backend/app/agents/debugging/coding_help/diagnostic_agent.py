@@ -7,12 +7,13 @@ Diagnostic Agent 模組
 import os
 import json
 import logging
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Optional
 from datetime import datetime
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
+from backend.app.agents.debugging.db import save_llm_charge
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,9 @@ class ZPDResult(BaseModel):
 async def generate_error_report(
     current_code: str,
     error_message: str,
-    problem_info: Dict[str, str]
+    problem_info: Dict[str, str],
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     生成單次錯誤報告
@@ -80,7 +83,19 @@ async def generate_error_report(
         
         content = response.content.replace("```json", "").replace("```", "").strip()
         report = json.loads(content)
-        
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="code_correction",
+                model_name="gpt-5.1",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         # 確保錯誤程式碼欄位存在
         if "error_code" not in report:
             report["error_code"] = current_code
@@ -109,7 +124,9 @@ async def generate_error_report(
 
 async def determine_zpd_level(
     previous_reports: List[Dict],
-    current_report: Dict[str, Any]
+    current_report: Dict[str, Any],
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     根據歷史 evidence_report 判斷 ZPD Level
@@ -163,7 +180,19 @@ async def determine_zpd_level(
         
         content = response.content.replace("```json", "").replace("```", "").strip()
         result = json.loads(content)
-        
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="code_correction",
+                model_name="gpt-4o-mini",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         # 確保 zpd_level 在有效範圍
         zpd_level = result.get("zpd_level", 3)
         if not isinstance(zpd_level, int) or zpd_level < 1 or zpd_level > 3:
@@ -200,7 +229,9 @@ async def run_diagnostic(
     current_code: str,
     error_message: str,
     problem_info: Dict[str, str],
-    previous_reports: List[Dict]
+    previous_reports: List[Dict],
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     執行完整診斷流程
@@ -209,10 +240,16 @@ async def run_diagnostic(
         包含 evidence_report 和 zpd_level 的完整診斷結果
     """
     # Step 1: 生成錯誤報告
-    error_report = await generate_error_report(current_code, error_message, problem_info)
+    error_report = await generate_error_report(
+        current_code, error_message, problem_info,
+        student_id=student_id, problem_id=problem_id
+    )
     
     # Step 2: 判斷 ZPD Level
-    zpd_result = await determine_zpd_level(previous_reports, error_report)
+    zpd_result = await determine_zpd_level(
+        previous_reports, error_report,
+        student_id=student_id, problem_id=problem_id
+    )
     
     return {
         "evidence_report": error_report,

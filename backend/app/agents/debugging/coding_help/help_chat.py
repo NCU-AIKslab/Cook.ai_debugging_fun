@@ -15,6 +15,7 @@ import tiktoken
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from pydantic import BaseModel, Field
+from backend.app.agents.debugging.db import save_llm_charge
 
 from .scaffolding_agent import generate_scaffold_response
 
@@ -54,7 +55,11 @@ def clean_markdown_filter(text: str) -> str:
     return text.strip()
 
 
-async def validate_input(message: str) -> Dict[str, Any]:
+async def validate_input(
+    message: str,
+    student_id: str = None,
+    problem_id: str = None,
+) -> Dict[str, Any]:
     """
     Input Guard Agent：驗證使用者輸入
     
@@ -126,7 +131,19 @@ async def validate_input(message: str) -> Dict[str, Any]:
         
         content = response.content.replace("```json", "").replace("```", "").strip()
         result = json.loads(content)
-        
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="code_correction",
+                model_name="gpt-4o-mini",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         return {
             "is_valid": result.get("is_valid", True),
             "reason": result.get("reason", ""),
@@ -148,7 +165,9 @@ async def generate_chat_response(
     zpd_level: int,
     evidence_report: Dict[str, Any],
     problem_info: Dict[str, str],
-    chat_log: List[Dict[str, Any]]
+    chat_log: List[Dict[str, Any]],
+    student_id: str = None,
+    problem_id: str = None,
 ) -> str:
     """
     依據 ZPD Level、evidence_report 與對話紀錄生成回覆
@@ -207,6 +226,19 @@ async def generate_chat_response(
     
     try:
         response = await llm.ainvoke(messages)
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="code_correction",
+                model_name="gpt-5.1",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         return clean_markdown_filter(response.content)
         
     except Exception as e:
@@ -219,7 +251,9 @@ async def process_chat(
     zpd_level: int,
     evidence_report: Dict[str, Any],
     problem_info: Dict[str, str],
-    chat_log: List[Dict[str, Any]]
+    chat_log: List[Dict[str, Any]],
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     處理聊天請求的主要流程
@@ -228,7 +262,7 @@ async def process_chat(
         包含 response, is_valid, updated_chat_log 的結果
     """
     # Step 1: 輸入驗證
-    validation = await validate_input(message)
+    validation = await validate_input(message, student_id=student_id, problem_id=problem_id)
     
     if not validation["is_valid"]:
         return {
@@ -243,7 +277,9 @@ async def process_chat(
         zpd_level=zpd_level,
         evidence_report=evidence_report,
         problem_info=problem_info,
-        chat_log=chat_log
+        chat_log=chat_log,
+        student_id=student_id,
+        problem_id=problem_id,
     )
     
     # Step 3: 更新對話紀錄

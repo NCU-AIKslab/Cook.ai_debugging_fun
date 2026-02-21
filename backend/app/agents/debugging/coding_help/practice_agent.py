@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from backend.app.agents.debugging.db import save_llm_charge
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,9 @@ llm = ChatOpenAI(model="gpt-5.1", temperature=0.2, request_timeout=120, max_retr
 async def generate_practice_questions(
     previous_reports: List[Dict],
     problem_info: Dict[str, str],
-    current_report: Dict[str, Any] = None
+    current_report: Dict[str, Any] = None,
+    student_id: str = None,
+    problem_id: str = None,
 ) -> List[Dict[str, Any]]:
     """
     根據學生的錯誤歷史生成練習選擇題
@@ -95,7 +98,19 @@ async def generate_practice_questions(
         
         content = response.content.replace("```json", "").replace("```", "").strip()
         practice_q = json.loads(content)
-        
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="practice",
+                model_name="gpt-5.1",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         if isinstance(practice_q, list):
             return practice_q
         else:
@@ -112,7 +127,9 @@ async def generate_practice_questions(
 async def run_practice_generation(
     previous_reports: List[Dict],
     problem_info: Dict[str, str],
-    current_report: Dict[str, Any] = None
+    current_report: Dict[str, Any] = None,
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     執行練習題生成流程
@@ -123,7 +140,9 @@ async def run_practice_generation(
     practice_questions = await generate_practice_questions(
         previous_reports=previous_reports,
         problem_info=problem_info,
-        current_report=current_report
+        current_report=current_report,
+        student_id=student_id,
+        problem_id=problem_id,
     )
     
     return {
