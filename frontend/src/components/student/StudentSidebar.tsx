@@ -1,7 +1,7 @@
 // frontend/src/components/student/StudentSidebar.tsx
 import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { FaCode, FaChevronLeft, FaChevronDown, FaChevronRight, FaChartBar } from 'react-icons/fa';
+import { FaCode, FaChevronLeft, FaChevronDown, FaChevronRight, FaChartBar, FaEdit } from 'react-icons/fa';
 import { useUser } from '../../contexts/UserContext';
 
 interface StudentSidebarProps {
@@ -102,14 +102,24 @@ function StudentSidebar({ isSidebarOpen, onToggle }: StudentSidebarProps) {
 
             {/* [Teacher Only] Student Progress */}
             {isTeacher && (
-              <li>
-                <NavLink to="/teacher/student-progress" className={topLevelLinkClass}>
-                  <FaChartBar className="flex-shrink-0 w-5 h-5" />
-                  <span className={`flex-1 whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
-                    學生答題情況
-                  </span>
-                </NavLink>
-              </li>
+              <>
+                <li>
+                  <NavLink to="/teacher/student-progress" className={topLevelLinkClass}>
+                    <FaChartBar className="flex-shrink-0 w-5 h-5" />
+                    <span className={`flex-1 whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
+                      學生答題情況
+                    </span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/teacher/problem-generation" className={topLevelLinkClass}>
+                    <FaEdit className="flex-shrink-0 w-5 h-5" />
+                    <span className={`flex-1 whitespace-nowrap transition-opacity duration-150 ${isTextVisible ? 'opacity-100' : 'opacity-0'} ${!isSidebarOpen && 'hidden'}`}>
+                      題目生成與設定
+                    </span>
+                  </NavLink>
+                </li>
+              </>
             )}
 
             {/* 程式練習 - Parent Menu */}

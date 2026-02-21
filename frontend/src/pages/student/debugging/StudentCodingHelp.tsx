@@ -3,6 +3,11 @@ import axios from 'axios';
 import Sidebar from '../../../components/student/debugging/Sidebar';
 import { useUser } from '../../../contexts/UserContext';
 import API_BASE_URL from '../../../config/api';
+import Editor from 'react-simple-code-editor';
+// @ts-ignore
+import { highlight, languages } from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/themes/prism-tomorrow.css';
 
 // --- Interfaces ---
 interface ProblemDetail {
@@ -12,6 +17,8 @@ interface ProblemDetail {
     input_description: string;
     output_description: string;
     samples: Array<{ input: string; output: string }>;
+    start_time?: string; // ISO string
+    end_time?: string;   // ISO string
 }
 
 interface ChatMessage {
@@ -96,9 +103,23 @@ const StudentCodingHelp: React.FC = () => {
     const [isDragging, setIsDragging] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // 用來控制輪詢是否繼續的 Ref
-    const isPollingRef = useRef(false);
+    // ★ 多題並行輪詢架構 ★
+    // activePollingSet: 追蹤哪些題目正在輪詢中（支援多題同時求救）
+    const activePollingSet = useRef<Set<string>>(new Set());
     const isPracticePollingRef = useRef(false);
+    const selectedProblemIdRef = useRef<string | null>(null);
+
+    // 同步更新 ref（render 期間，比 useEffect 更早）
+    selectedProblemIdRef.current = selectedProblemId;
+
+    // ★ React derived state pattern ★
+    // 切題時立即清除舊 UI（paint 之前），根據 activePollingSet 推斷 loading
+    const [renderedProblemId, setRenderedProblemId] = useState(selectedProblemId);
+    if (renderedProblemId !== selectedProblemId) {
+        setRenderedProblemId(selectedProblemId);
+        setChatMessages([]);
+        setIsChatLoading(activePollingSet.current.has(selectedProblemId ?? ''));
+    }
 
     const [canRequestHelp, setCanRequestHelp] = useState(false);
 
@@ -109,12 +130,44 @@ const StudentCodingHelp: React.FC = () => {
 
     const isProblemSelected = !!selectedProblemId;
 
+    // Time Limit Logic
+    const [timeStatus, setTimeStatus] = useState<'active' | 'not_started' | 'ended'>('active');
+
+    useEffect(() => {
+        const checkTimeStatus = () => {
+            if (!problemData) return;
+            const now = new Date();
+
+            if (problemData.start_time) {
+                const start = new Date(problemData.start_time);
+                if (now < start) {
+                    setTimeStatus('not_started');
+                    return;
+                }
+            }
+
+            if (problemData.end_time) {
+                const end = new Date(problemData.end_time);
+                if (now > end) {
+                    setTimeStatus('ended');
+                    return;
+                }
+            }
+
+            setTimeStatus('active');
+        };
+
+        checkTimeStatus();
+        const interval = setInterval(checkTimeStatus, 1000); // Check every second for immediate active/lock update
+        return () => clearInterval(interval);
+    }, [problemData]);
+
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages, isChatLoading]);
 
     // Cleanup polling on unmount
     useEffect(() => {
         return () => {
-            isPollingRef.current = false;
+            activePollingSet.current.clear();
             isPracticePollingRef.current = false;
         };
     }, []);
@@ -166,9 +219,8 @@ const StudentCodingHelp: React.FC = () => {
             setFeedbackMap({});
 
             setChatMessages([]);
+            setIsChatLoading(activePollingSet.current.has(selectedProblemId));
             setActiveRightTab('editor'); // V3: Reset to editor tab on problem change
-
-            isPollingRef.current = false;
 
             try {
                 const problemRes = await axios.get(`${API_BASE_URL}/debugging/problems/${selectedProblemId}`);
@@ -228,6 +280,41 @@ const StudentCodingHelp: React.FC = () => {
                 } else {
                     setStudentCode("# Write your code here\n");
                 }
+
+                // ★ 切回時自動偵測 help 狀態 ★
+                // 若此題正在背景輪詢中 → 保持 loading（已由 derived state 設定）
+                // 若此題有已完成的 help 結果 → 自動載入
+                if (!data?.is_accepted && data?.submission_num > 0) {
+                    const subNum = data.submission_num || 0;
+                    const repNum = data.latest_report_num || 0;
+                    if (subNum <= repNum && !activePollingSet.current.has(selectedProblemId)) {
+                        // 此提交已有報告，嘗試載入聊天紀錄
+                        try {
+                            const historyRes = await axios.get(
+                                `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`,
+                                { params: { submission_num: subNum } }
+                            );
+                            // 再次確認仍在此題
+                            if (selectedProblemIdRef.current === selectedProblemId) {
+                                const chatLog = historyRes.data.chat_log || [];
+                                if (chatLog.length > 0) {
+                                    const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
+                                        role: msg.role as 'user' | 'agent',
+                                        content: msg.content,
+                                        zpd: msg.zpd,
+                                        timestamp: msg.timestamp,
+                                        type: msg.type
+                                    }));
+                                    setChatMessages(msgs);
+                                    setActiveHelpNum(subNum);
+                                    // 不自動跳到 chatbot tab，讓使用者保持在編碼頁面
+                                }
+                            }
+                        } catch (e) {
+                            // 靜默失敗，不影響主流程
+                        }
+                    }
+                }
             } catch (error) {
                 console.error("Fetch data failed:", error);
             } finally {
@@ -237,60 +324,73 @@ const StudentCodingHelp: React.FC = () => {
         fetchData();
     }, [selectedProblemId, student.stu_id]);
 
-    // 輪詢函式 (Modified: Accept targetNum for snapshot polling)
-    const pollForAnalysisResult = async (targetNum: number, retryCount = 0) => {
-        if (!isPollingRef.current) return;
+    // ★ 每題獨立輪詢函式 ★
+    // forProblemId: 此輪詢所屬的題目（不依賴 closure 或 singleton ref）
+    const pollForAnalysisResult = async (targetNum: number, forProblemId: string, retryCount = 0) => {
+        // 若此題已從 polling set 移除（例如被新的 help request 取代），停止
+        if (!activePollingSet.current.has(forProblemId)) return;
+
         if (retryCount > 60) {
-            setIsChatLoading(false);
-            setChatMessages(prev => [...prev, { role: 'agent', content: "AI 回應逾時，請重新整理或稍後再試。", type: 'chat' }]);
-            isPollingRef.current = false;
-            // Allow retry
-            setCanRequestHelp(true);
+            activePollingSet.current.delete(forProblemId);
+            if (selectedProblemIdRef.current === forProblemId) {
+                setIsChatLoading(false);
+                setChatMessages(prev => [...prev, { role: 'agent', content: "AI 回應逾時，請重新整理或稍後再試。", type: 'chat' }]);
+                setCanRequestHelp(true);
+            }
             return;
         }
 
         try {
-            // V3: Pass submission_num to backend to poll STATUS of that specific submission
             const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId,
+                problem_id: forProblemId,
                 submission_num: targetNum
             });
 
+            // 輪詢期間可能已被取消
+            if (!activePollingSet.current.has(forProblemId)) return;
+
             const { status, reply, chat_log } = initRes.data;
+            const isViewing = selectedProblemIdRef.current === forProblemId;
 
             if (status === 'resumed') {
-                // 優先使用 chat_log，若無則使用 reply
-                if (chat_log && chat_log.length > 0) {
-                    const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
-                        role: msg.role as 'user' | 'agent',
-                        content: msg.content,
-                        zpd: msg.zpd,
-                        timestamp: msg.timestamp,
-                        type: msg.type
-                    }));
-                    setChatMessages(msgs);
-                } else if (reply) {
-                    setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                activePollingSet.current.delete(forProblemId);
+                if (isViewing) {
+                    if (chat_log && chat_log.length > 0) {
+                        const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                            role: msg.role as 'user' | 'agent',
+                            content: msg.content,
+                            zpd: msg.zpd,
+                            timestamp: msg.timestamp,
+                            type: msg.type
+                        }));
+                        setChatMessages(msgs);
+                    } else if (reply) {
+                        setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                    }
+                    setIsChatLoading(false);
                 }
-                setIsChatLoading(false);
-                isPollingRef.current = false;
+                // 不在此題 → 結果留在後端，切回時 fetchData 會載入
             } else if (status === 'pending' || status === 'started') {
-                setTimeout(() => pollForAnalysisResult(targetNum, retryCount + 1), 2000);
+                // 繼續輪詢（不管使用者在看哪題）
+                setTimeout(() => pollForAnalysisResult(targetNum, forProblemId, retryCount + 1), 2000);
             } else {
-                setIsChatLoading(false);
-                if (status === 'no_report') {
-                    setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
-                    // No report found, maybe allow requesting again?
+                activePollingSet.current.delete(forProblemId);
+                if (isViewing) {
+                    setIsChatLoading(false);
+                    if (status === 'no_report') {
+                        setChatMessages([{ role: 'agent', content: "目前沒有偵測到錯誤報告，若有問題請重新提交。", type: 'chat' }]);
+                    }
                 }
-                isPollingRef.current = false;
             }
         } catch (error) {
             console.error("Polling error:", error);
-            setIsChatLoading(false);
-            setChatMessages(prev => [...prev, { role: 'agent', content: "請於「程式編碼」分頁提交程式碼。", type: 'chat' }]);
-            isPollingRef.current = false;
-            setCanRequestHelp(true);
+            activePollingSet.current.delete(forProblemId);
+            if (selectedProblemIdRef.current === forProblemId) {
+                setIsChatLoading(false);
+                setChatMessages(prev => [...prev, { role: 'agent', content: "請於「程式編碼」分頁提交程式碼。", type: 'chat' }]);
+                setCanRequestHelp(true);
+            }
         }
     };
 
@@ -309,29 +409,33 @@ const StudentCodingHelp: React.FC = () => {
             const { data } = codeRes.data;
             const pInfo = data?.practice;
 
-            if (pInfo && pInfo.exists && pInfo.data && pInfo.data.length > 0) {
-                // 練習題已生成
-                setPracticeList(pInfo.data);
-                setPracticeId(pInfo.id);
-                const isCompleted = pInfo.completed;
-                setPracticeStatus(isCompleted ? 'done' : 'todo');
+            if (pInfo && pInfo.exists) {
+                if (pInfo.data && pInfo.data.length > 0) {
+                    // 練習題已生成 (有題目)
+                    setPracticeList(pInfo.data);
+                    setPracticeId(pInfo.id);
+                    const isCompleted = pInfo.completed;
+                    setPracticeStatus(isCompleted ? 'done' : 'todo');
 
-                if (pInfo.student_answer && Array.isArray(pInfo.student_answer)) {
-                    const ansMap: QuestionAnswerState = {};
-                    const fbMap: QuestionFeedbackState = {};
-                    pInfo.student_answer.forEach((rec: any) => {
-                        ansMap[rec.q_id] = rec.selected_option_id;
-                        if (rec.is_correct) {
-                            fbMap[rec.q_id] = true;
-                        }
-                    });
-                    setUserAnswers(ansMap);
-                    setFeedbackMap(fbMap);
+                    if (pInfo.student_answer && Array.isArray(pInfo.student_answer)) {
+                        const ansMap: QuestionAnswerState = {};
+                        const fbMap: QuestionFeedbackState = {};
+                        pInfo.student_answer.forEach((rec: any) => {
+                            ansMap[rec.q_id] = rec.selected_option_id;
+                            if (rec.is_correct) {
+                                fbMap[rec.q_id] = true;
+                            }
+                        });
+                        setUserAnswers(ansMap);
+                        setFeedbackMap(fbMap);
+                    }
+                } else {
+                    // exists=true 但 data=[] → 無練習題 (後端已確認無報告)
+                    setPracticeStatus('no_practice');
                 }
-
                 isPracticePollingRef.current = false;
             } else {
-                // 繼續輪詢
+                // exists=false → 練習題尚未生成，繼續輪詢
                 setTimeout(() => pollForPractice(retryCount + 1), 2000);
             }
         } catch (error) {
@@ -343,57 +447,60 @@ const StudentCodingHelp: React.FC = () => {
     // Phase 8: Manual Request Help
     // Phase 8: Manual Request Help
     const handleRequestHelp = async () => {
-        if (!canRequestHelp || isChatLoading || !selectedProblemId) return;
+        if (!canRequestHelp || isChatLoading || !selectedProblemId || timeStatus !== 'active') return;
 
-        setCanRequestHelp(false); // Lock button
+        const requestProblemId = selectedProblemId;
+        setCanRequestHelp(false);
         setIsChatLoading(true);
-
-        // Clear view for new analysis as per requirement
         setChatMessages([]);
 
-        // V3: Lock to the current submission num for this help session
         const helpNum = latestSubmissionNum;
         setActiveHelpNum(helpNum);
 
         try {
-            // V2: Snapshot Analysis - Lock to latestSubmissionNum
             const initRes = await axios.post(`${API_BASE_URL}/debugging/help/init`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId,
+                problem_id: requestProblemId,
                 force_refresh: true,
                 submission_num: helpNum
             });
 
+            const isViewing = selectedProblemIdRef.current === requestProblemId;
             const { status, chat_log, reply } = initRes.data;
 
             if (status === 'resumed') {
-                // 已有對話紀錄 -> 直接顯示
-                if (chat_log && chat_log.length > 0) {
-                    const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
-                        role: msg.role as 'user' | 'agent',
-                        content: msg.content,
-                        zpd: msg.zpd,
-                        timestamp: msg.timestamp,
-                        type: msg.type
-                    }));
-                    setChatMessages(msgs);
-                } else if (reply) {
-                    setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                if (isViewing) {
+                    if (chat_log && chat_log.length > 0) {
+                        const msgs: ChatMessage[] = chat_log.map((msg: any) => ({
+                            role: msg.role as 'user' | 'agent',
+                            content: msg.content,
+                            zpd: msg.zpd,
+                            timestamp: msg.timestamp,
+                            type: msg.type
+                        }));
+                        setChatMessages(msgs);
+                    } else if (reply) {
+                        setChatMessages([{ role: 'agent', content: reply, type: 'scaffold' }]);
+                    }
+                    setIsChatLoading(false);
                 }
-                setIsChatLoading(false);
             } else if (status === 'started' || status === 'pending') {
-                // 分析已觸發或處理中 -> 開始輪詢
-                isPollingRef.current = true;
-                pollForAnalysisResult(helpNum);
+                // 加入 polling set 並開始獨立輪詢
+                activePollingSet.current.add(requestProblemId);
+                pollForAnalysisResult(helpNum, requestProblemId);
             } else {
-                setChatMessages([{ role: 'agent', content: "目前無錯誤報告。", type: 'chat' }]);
-                setIsChatLoading(false);
+                if (isViewing) {
+                    setChatMessages([{ role: 'agent', content: "目前無錯誤報告。", type: 'chat' }]);
+                    setIsChatLoading(false);
+                }
             }
         } catch (error) {
             console.error("Request help failed:", error);
-            setChatMessages([{ role: 'agent', content: "請求失敗，請稍後再試。", type: 'chat' }]);
-            setIsChatLoading(false);
-            setCanRequestHelp(true); // Re-enable on error
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setChatMessages([{ role: 'agent', content: "請求失敗，請稍後再試。", type: 'chat' }]);
+                setIsChatLoading(false);
+                setCanRequestHelp(true);
+            }
         }
     };
 
@@ -408,11 +515,14 @@ const StudentCodingHelp: React.FC = () => {
 
         // V3: When switching to chatbot tab, load existing chat history
         if (tab === 'chatbot' && chatMessages.length === 0 && !isChatLoading) {
+            const tabProblemId = selectedProblemId;
             try {
                 const historyRes = await axios.get(
-                    `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${selectedProblemId}`,
+                    `${API_BASE_URL}/debugging/help/history/${student.stu_id}/${tabProblemId}`,
                     { params: { submission_num: latestSubmissionNum || undefined } }
                 );
+                // 守衛：API 期間可能已切題
+                if (selectedProblemIdRef.current !== tabProblemId) return;
                 const chatLog = historyRes.data.chat_log || [];
                 if (chatLog.length > 0) {
                     const msgs: ChatMessage[] = chatLog.map((msg: any) => ({
@@ -434,7 +544,7 @@ const StudentCodingHelp: React.FC = () => {
 
     // 3. Run Code
     const handleRunCode = async () => {
-        if (!selectedProblemId || isAccepted) return;
+        if (!selectedProblemId || isAccepted || timeStatus !== 'active') return;
 
         setLoading(true);
         setResult(null);
@@ -505,10 +615,11 @@ const StudentCodingHelp: React.FC = () => {
         }
     };
 
-    // 4. Chat Send (保持不變)
+    // 4. Chat Send
     const handleSendChat = async () => {
-        if (!chatInput.trim() || isChatLoading || !selectedProblemId) return;
+        if (!chatInput.trim() || isChatLoading || !selectedProblemId || timeStatus !== 'active') return;
         const userMsg = chatInput;
+        const requestProblemId = selectedProblemId; // 捕獲當前題目
         setChatInput("");
         setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
         setIsChatLoading(true);
@@ -517,21 +628,26 @@ const StudentCodingHelp: React.FC = () => {
             // V3: Send activeHelpNum so backend saves to the correct dialogue
             const res = await axios.post(`${API_BASE_URL}/debugging/help/chat`, {
                 student_id: student.stu_id,
-                problem_id: selectedProblemId,
+                problem_id: requestProblemId, // 使用捕獲值，非 closure
                 message: userMsg,
                 submission_num: activeHelpNum
             });
+            // 守衛：若已切題則不更新 UI
+            if (selectedProblemIdRef.current !== requestProblemId) return;
             setChatMessages(prev => [...prev, { role: 'agent', content: res.data.reply, type: 'chat' }]);
         } catch (error) {
+            if (selectedProblemIdRef.current !== requestProblemId) return;
             setChatMessages(prev => [...prev, { role: 'agent', content: "發生錯誤，請稍後再試。", type: 'chat' }]);
         } finally {
-            setIsChatLoading(false);
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setIsChatLoading(false);
+            }
         }
     };
 
     // 5. Handle Option Select (保持不變)
     const handleOptionSelect = async (qId: string, optionId: number, correctId: number) => {
-        if (feedbackMap[qId]) return;
+        if (feedbackMap[qId] || timeStatus !== 'active') return;
 
         setUserAnswers(prev => ({ ...prev, [qId]: optionId }));
 
@@ -601,7 +717,11 @@ const StudentCodingHelp: React.FC = () => {
                         <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="mr-3 text-gray-500 hover:text-gray-700">
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
                         </button>
-                        <h2 className="font-bold text-gray-800">{problemData?.title || '請選擇題目'}</h2>
+                        <h2 className="font-bold text-gray-800 flex items-center gap-2">
+                            {problemData?.title || '請選擇題目'}
+                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">Time's Up</span>}
+                            {timeStatus === 'not_started' && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded border border-yellow-200">未開始 (Not Started)</span>}
+                        </h2>
                     </div>
                 </div>
 
@@ -648,9 +768,9 @@ const StudentCodingHelp: React.FC = () => {
 
                             <button
                                 onClick={() => handleTabChange('chatbot')}
-                                disabled={!isProblemSelected || !hasSubmission || loading}
+                                disabled={!isProblemSelected || !hasSubmission || loading || timeStatus !== 'active'}
                                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center gap-2
-                                    ${!isProblemSelected || !hasSubmission || loading
+                                    ${!isProblemSelected || !hasSubmission || loading || timeStatus !== 'active'
                                         ? 'border-transparent text-gray-300 cursor-not-allowed'
                                         : activeRightTab === 'chatbot'
                                             ? 'border-blue-500 text-blue-600'
@@ -662,9 +782,9 @@ const StudentCodingHelp: React.FC = () => {
                             {/* [修改 4] 練習題 Tab 按鈕邏輯更新 */}
                             <button
                                 onClick={() => handleTabChange('practice')}
-                                disabled={!isProblemSelected || practiceStatus === 'locked'}
+                                disabled={!isProblemSelected || practiceStatus === 'locked' || timeStatus !== 'active'}
                                 className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors flex items-center justify-center space-x-2 
-                                    ${!isProblemSelected
+                                    ${!isProblemSelected || timeStatus !== 'active'
                                         ? 'border-transparent text-gray-300 cursor-not-allowed'
                                         : activeRightTab === 'practice'
                                             ? 'border-green-500 text-green-700'
@@ -684,25 +804,38 @@ const StudentCodingHelp: React.FC = () => {
                         <div className="flex-1 relative overflow-hidden flex flex-col">
                             {activeRightTab === 'editor' && (
                                 <>
-                                    <div className="flex-1 relative bg-[#1e1e1e]">
-                                        <textarea
-                                            className={`w-full h-full bg-[#1e1e1e] text-gray-300 font-mono text-sm p-4 outline-none resize-none border-none focus:ring-0 whitespace-pre overflow-auto ${(isAccepted || !isProblemSelected) ? 'cursor-not-allowed opacity-80' : ''}`}
+                                    <div className="flex-1 relative bg-[#1e1e1e] overflow-auto">
+                                        <Editor
                                             value={studentCode}
-                                            onChange={(e) => (!isAccepted && isProblemSelected) && setStudentCode(e.target.value)}
-                                            spellCheck={false}
-                                            readOnly={isAccepted || !isProblemSelected}
-                                            placeholder={!isProblemSelected ? "請先從左側選擇題目..." : ""}
+                                            onValueChange={(code) => (!isAccepted && isProblemSelected && timeStatus === 'active') && setStudentCode(code)}
+                                            highlight={(code) => highlight(code, languages.python, 'python')}
+                                            padding={16}
+                                            readOnly={isAccepted || !isProblemSelected || timeStatus !== 'active'}
+                                            placeholder={!isProblemSelected ? "請先從左側選擇題目..." : timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "時間已結束，無法作答。" : "# Write your code here\n"}
+                                            tabSize={4}
+                                            insertSpaces={true}
+                                            style={{
+                                                fontFamily: '"Fira Code", "Fira Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
+                                                fontSize: 14,
+                                                lineHeight: 1.6,
+                                                minHeight: '100%',
+                                                backgroundColor: '#1e1e1e',
+                                                color: '#d4d4d4',
+                                            }}
+                                            className={`${(isAccepted || !isProblemSelected || timeStatus !== 'active') ? 'cursor-not-allowed opacity-80' : ''}`}
                                         />
                                         {isAccepted && <div className="absolute top-4 right-4 bg-green-600 text-white px-3 py-1 text-xs rounded shadow opacity-90">Accepted (Read Only)</div>}
+                                        {timeStatus === 'ended' && !isAccepted && <div className="absolute top-4 right-4 bg-red-600 text-white px-3 py-1 text-xs rounded shadow opacity-90">Time's Up (Locked)</div>}
+                                        {timeStatus === 'not_started' && <div className="absolute top-4 right-4 bg-yellow-600 text-white px-3 py-1 text-xs rounded shadow opacity-90">Not Started (Locked)</div>}
                                     </div>
                                     <div className="bg-white border-t border-gray-200 p-2 flex justify-between items-center h-14">
                                         <div className="px-2">{renderStatus(result)}</div>
                                         <button
                                             onClick={handleRunCode}
-                                            disabled={loading || isAccepted || !isProblemSelected}
-                                            className={`px-6 py-2 rounded text-sm font-bold text-white transition-colors ${(loading || isAccepted || !isProblemSelected) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                                            disabled={loading || isAccepted || !isProblemSelected || timeStatus !== 'active'}
+                                            className={`px-6 py-2 rounded text-sm font-bold text-white transition-colors ${(loading || isAccepted || !isProblemSelected || timeStatus !== 'active') ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
                                         >
-                                            {loading ? 'Running...' : isAccepted ? 'Locked' : 'Run Code'}
+                                            {loading ? 'Running...' : isAccepted ? 'Locked' : timeStatus === 'ended' ? 'Expired' : timeStatus === 'not_started' ? 'Not Started' : 'Run Code'}
                                         </button>
                                     </div>
                                 </>
@@ -711,11 +844,10 @@ const StudentCodingHelp: React.FC = () => {
                             {activeRightTab === 'chatbot' && (
                                 <div className="flex flex-col h-full bg-white">
                                     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
-                                        {chatMessages.length === 0 && !isChatLoading && (
+                                        {(isAccepted || (chatMessages.length === 0 && !isChatLoading)) && (
                                             <div className="flex flex-col items-center justify-center h-full text-gray-500 space-y-4">
                                                 {isAccepted ? (
                                                     <div className="bg-green-50 border border-green-200 p-6 rounded-lg text-green-800 text-center animate-fadeIn shadow-sm">
-                                                        <div className="text-4xl mb-3">🎉</div>
                                                         <h3 className="text-lg font-bold mb-1">程式正確請前往練習題頁面</h3>
                                                     </div>
                                                 ) : (
@@ -733,9 +865,9 @@ const StudentCodingHelp: React.FC = () => {
                                                 )}
                                             </div>
                                         )}
-                                        {chatMessages.map((msg, idx) => (
+                                        {!isAccepted && chatMessages.map((msg, idx) => (
                                             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                                <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
+                                                <div className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm whitespace-pre-wrap break-words break-all ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
                                                     {msg.role === 'agent' && <div className="text-xs font-bold text-blue-600 mb-1">System</div>}
                                                     {msg.content}
                                                 </div>
@@ -753,31 +885,32 @@ const StudentCodingHelp: React.FC = () => {
                                                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
                                                     : 'bg-yellow-500 hover:bg-yellow-600 text-white shadow-sm hover:shadow'}`}
                                         >
-                                            {isChatLoading ? (
-                                                <>
-                                                    <span className="animate-spin mr-2">⏳</span>
-                                                    分析中...
-                                                </>
-                                            ) : isAccepted ? (
+                                            {isAccepted ? (
                                                 <>
                                                     <span className="mr-2">✨</span>
                                                     程式已正確
                                                 </>
                                             ) : (
                                                 <>
-                                                    <span className="mr-2">🆘</span>
-                                                    求救 (Request Help)
+                                                    求救
                                                 </>
                                             )}
                                         </button>
 
                                         <div className="flex space-x-2">
-                                            <input
-                                                className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
+                                            <textarea
+                                                className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:bg-gray-100 resize-none h-10 min-h-[40px] max-h-[120px] overflow-y-auto"
                                                 placeholder={isAccepted ? "題目已通過，無法繼續對話" : chatMessages.length === 0 ? "請先點擊求救按鈕..." : "針對錯誤提問..."}
                                                 value={chatInput}
                                                 onChange={(e) => setChatInput(e.target.value)}
-                                                onKeyDown={(e) => e.key === 'Enter' && !isAccepted && chatMessages.length > 0 && handleSendChat()}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                                        e.preventDefault();
+                                                        if (!isAccepted && chatMessages.length > 0) {
+                                                            handleSendChat();
+                                                        }
+                                                    }
+                                                }}
                                                 disabled={isChatLoading || chatMessages.length === 0 || !isProblemSelected || isAccepted}
                                             />
                                             <button
@@ -835,7 +968,7 @@ const StudentCodingHelp: React.FC = () => {
                                                 const isLocked = feedbackMap[qId];
 
                                                 return (
-                                                    <div key={qId} className={`bg-white border rounded-xl shadow-sm overflow-hidden transition-all ${isLocked ? 'border-green-200 ring-1 ring-green-100 opacity-80' : 'border-gray-200'}`}>
+                                                    <div key={qId} className={`bg-white border rounded-xl shadow-sm overflow-hidden transition-all ${isLocked ? 'bg-green-50 border-green-200 shadow-sm' : 'border-gray-200'}`}>
                                                         <div className={`p-5 border-b border-gray-100 ${isLocked ? 'bg-green-50' : 'bg-gray-50'}`}>
                                                             <div className="flex justify-between items-start">
                                                                 <div className="flex space-x-3">
@@ -863,9 +996,11 @@ const StudentCodingHelp: React.FC = () => {
 
                                                                 if (isLocked) {
                                                                     if (isCorrectOption) {
-                                                                        containerClass = "border-green-500 bg-green-50 ring-1 ring-green-500 cursor-default";
+                                                                        containerClass = "bg-green-600 text-white border-green-600 font-medium cursor-default";
+                                                                    } else if (isSelected) {
+                                                                        containerClass = "bg-red-300 text-white border-red-300 font-medium cursor-not-allowed";
                                                                     } else {
-                                                                        containerClass = "border-gray-100 opacity-50 cursor-not-allowed";
+                                                                        containerClass = "bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed opacity-50";
                                                                     }
                                                                 } else {
                                                                     if (isSelected) {
@@ -883,13 +1018,13 @@ const StudentCodingHelp: React.FC = () => {
                                                                             className={`flex items-start p-4 rounded-lg border transition-all ${containerClass} ${isLocked ? '' : 'cursor-pointer'}`}
                                                                             onClick={() => !isLocked && handleOptionSelect(qId, opt.id, item.answer_config.correct_id)}
                                                                         >
-                                                                            <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center mr-3 shrink-0 ${(isLocked && isCorrectOption) || (isSelected && isCorrectOption) ? 'border-green-600' : isSelected ? 'border-red-500' : 'border-gray-400'}`}>
+                                                                            <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center mr-3 shrink-0 ${(isLocked && isCorrectOption) ? 'border-white' : (isLocked && isSelected) ? 'border-white' : (isSelected && isCorrectOption) ? 'border-green-600' : isSelected ? 'border-red-500' : 'border-gray-400'}`}>
                                                                                 {((isLocked && isCorrectOption) || isSelected) && (
-                                                                                    <div className={`w-2 h-2 rounded-full ${(isLocked && isCorrectOption) || (isSelected && isCorrectOption) ? 'bg-green-600' : 'bg-red-500'}`}></div>
+                                                                                    <div className={`w-2 h-2 rounded-full ${(isLocked && isCorrectOption) ? 'bg-white' : (isLocked && isSelected) ? 'bg-white' : (isSelected && isCorrectOption) ? 'bg-green-600' : 'bg-red-500'}`}></div>
                                                                                 )}
                                                                             </div>
                                                                             <div className="flex-1">
-                                                                                <span className={`text-sm font-medium ${isLocked && !isCorrectOption ? 'text-gray-400' : 'text-gray-700'}`}>{opt.label}</span>
+                                                                                <span className={`text-sm font-medium ${isLocked && isCorrectOption ? 'text-white' : isLocked && isSelected ? 'text-white' : isLocked ? 'text-gray-400' : 'text-gray-700'}`}>{opt.label}</span>
                                                                             </div>
                                                                         </label>
                                                                         {isLocked && isCorrectOption && (

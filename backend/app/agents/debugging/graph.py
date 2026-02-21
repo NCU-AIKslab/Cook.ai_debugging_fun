@@ -69,17 +69,23 @@ class RouteQuery(BaseModel):
 
 async def diagnostic_agent(state: AgentState):
     """分析錯誤並對應課程概念 - 呼叫 coding_help.diagnostic_agent"""
+    student_id = state.get('student_id')
+    problem_id = state.get('problem_id')
     # 生成錯誤報告
     report = await generate_error_report(
         current_code=state['current_code'],
         error_message=state['error_message'],
-        problem_info=state['problem_info']
+        problem_info=state['problem_info'],
+        student_id=student_id,
+        problem_id=problem_id,
     )
     
     # 判斷 ZPD Level
     zpd_result = await determine_zpd_level(
         previous_reports=state['previous_reports'],
-        current_report=report
+        current_report=report,
+        student_id=student_id,
+        problem_id=problem_id,
     )
     
     return {
@@ -90,7 +96,11 @@ async def diagnostic_agent(state: AgentState):
 
 async def router_node(state: AgentState):
     """決定是否需要檢索教材 - 呼叫 coding_help.scaffolding_agent"""
-    route_result = await decide_retrieval(state['evidence_report'])
+    route_result = await decide_retrieval(
+        state['evidence_report'],
+        student_id=state.get('student_id'),
+        problem_id=state.get('problem_id'),
+    )
     
     search_query = ""
     if route_result["datasource"] == "vector_store":
@@ -112,7 +122,9 @@ async def scaffolding_agent(state: AgentState):
         evidence_report=state['evidence_report'],
         problem_info=state['problem_info'],
         current_code=state['current_code'],
-        retrieved_docs=state.get('retrieved_docs', [])
+        retrieved_docs=state.get('retrieved_docs', []),
+        student_id=state.get('student_id'),
+        problem_id=state.get('problem_id'),
     )
     
     return {"initial_response": response}
@@ -123,7 +135,9 @@ async def practice_agent(state: AgentState):
     practice_q = await generate_practice_questions(
         previous_reports=state.get('previous_reports', []),
         problem_info=state.get('problem_info', {}),
-        current_report=state.get('evidence_report')
+        current_report=state.get('evidence_report'),
+        student_id=state.get('student_id'),
+        problem_id=state.get('problem_id'),
     )
     
     return {"practice_question": practice_q}

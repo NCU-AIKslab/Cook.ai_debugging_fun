@@ -99,6 +99,38 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     // Tab 狀態
     const [activeTab, setActiveTab] = useState<'concept' | 'implementation'>('concept');
 
+    // Time Status Logic
+    const [timeStatus, setTimeStatus] = useState<'active' | 'not_started' | 'ended'>('active');
+
+    useEffect(() => {
+        const checkTimeStatus = () => {
+            if (!problemData) return;
+            const now = new Date();
+
+            if (problemData.start_time) {
+                const start = new Date(problemData.start_time);
+                if (now < start) {
+                    setTimeStatus('not_started');
+                    return;
+                }
+            }
+
+            if (problemData.end_time) {
+                const end = new Date(problemData.end_time);
+                if (now > end) {
+                    setTimeStatus('ended');
+                    return;
+                }
+            }
+
+            setTimeStatus('active');
+        };
+
+        checkTimeStatus();
+        const interval = setInterval(checkTimeStatus, 1000); // Check every second for immediate active/lock update
+        return () => clearInterval(interval);
+    }, [problemData]);
+
     // 舊版 Pre-Coding 狀態
     const [pcData, setPcData] = useState<PreCodingState | null>(null);
     const [pcLoading, setPcLoading] = useState(false);
@@ -110,6 +142,21 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     const [isSendingChat, setIsSendingChat] = useState(false);
     const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
     const chatContainerRef = useRef<HTMLDivElement>(null);
+    const chatProblemIdRef = useRef<string | null>(null); // 追蹤聊天所屬題目
+    const selectedProblemIdRef = useRef<string | null>(null);
+
+    // 同步更新 ref（必須在 render 期間同步執行）
+    selectedProblemIdRef.current = selectedProblemId;
+
+    // ★ 核心修正：React derived state pattern ★
+    // 當題目切換時，立即清除舊資料（在 paint 之前），防止一閃
+    const [renderedProblemId, setRenderedProblemId] = useState(selectedProblemId);
+    if (renderedProblemId !== selectedProblemId) {
+        setRenderedProblemId(selectedProblemId);
+        setLogicChatState(null);
+        setSuggestedReplies([]);
+        setIsSendingChat(chatProblemIdRef.current === selectedProblemId);
+    }
 
     // IME 狀態 (中文輸入法)
     const [isComposing, setIsComposing] = useState(false);
@@ -179,6 +226,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
             setProblemData(null);
             setLogicChatState(null);
             setSuggestedReplies([]);
+            setIsSendingChat(chatProblemIdRef.current === selectedProblemId);
+            setChatInput('');
             setActiveTab('concept');
 
             // 1. 嘗試從 LocalStorage 恢復回饋紀錄
@@ -202,7 +251,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                 console.warn("左側題目載入失敗", err);
             }
 
-            // 3. 載入 Logic Chat 狀態
+            // 3. 載入 Logic Chat 狀態（一定從後端載入最新資料）
             setPcLoading(true);
             try {
                 const logicRes = await axios.get(`${API_BASE_URL}/debugging/precoding/logic/status/${selectedProblemId}`, {
@@ -254,11 +303,13 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     // --- Chat 送出邏輯 ---
     const handleSendChat = async (messageOverride?: string) => {
         const userMessage = messageOverride || chatInput.trim();
-        if (!userMessage || isSendingChat || !selectedProblemId) return;
+        if (!userMessage || isSendingChat || !selectedProblemId || timeStatus !== 'active') return;
 
         setChatInput('');
         setSuggestedReplies([]);
         setIsSendingChat(true);
+        const requestProblemId = selectedProblemId; // 記錄發送時的題目 ID
+        chatProblemIdRef.current = requestProblemId;
 
         // Optimistic UI update
         setLogicChatState(prev => {
@@ -269,7 +320,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                     ...prev.chat_log,
                     {
                         role: 'student' as const,
-                        content: userMessage,
+                        content: userMessage || '',
                         stage: prev.current_stage,
                         score: prev.current_score,
                         timestamp: new Date().toISOString()
@@ -287,6 +338,9 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
 
             if (res.data.status === 'success') {
                 const data = res.data.data;
+                // 若使用者已切到其他題目，不更新 UI
+                if (selectedProblemIdRef.current !== requestProblemId) return;
+                chatProblemIdRef.current = null; // 清除 in-flight 標記
                 setLogicChatState({
                     status: 'existing',
                     current_stage: data.current_stage,
@@ -313,15 +367,22 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
             }
         } catch (err) {
             console.error("Chat Error:", err);
-            setLogicChatState(prev => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    chat_log: prev.chat_log.slice(0, -1)
-                };
-            });
+            // 只在仍停留同一題時才回滾樂觀訊息
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setLogicChatState(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        chat_log: prev.chat_log.slice(0, -1)
+                    };
+                });
+            }
         } finally {
-            setIsSendingChat(false);
+            chatProblemIdRef.current = null; // 清除 in-flight 標記
+            // 只在仍停留在同一題時才重置 loading
+            if (selectedProblemIdRef.current === requestProblemId) {
+                setIsSendingChat(false);
+            }
         }
     };
 
@@ -337,7 +398,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
 
     // --- 舊版提交邏輯 ---
     const handleAnswerSubmit = async (stage: 'logic' | 'error_code' | 'explain_code', questionId: string, optionId: number) => {
-        if (!pcData || !selectedProblemId) return;
+        if (!pcData || !selectedProblemId || timeStatus !== 'active') return;
         if (submittingIds.has(questionId)) return;
 
         setSubmittingIds(prev => new Set(prev).add(questionId));
@@ -499,7 +560,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                         return (
                             <button
                                 key={opt.id}
-                                disabled={isLocked || isSubmitting}
+                                disabled={isLocked || isSubmitting || timeStatus !== 'active'}
                                 onClick={() => handleAnswerSubmit(stage, question.id, opt.id)}
                                 className={btnClass}
                             >
@@ -563,7 +624,11 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                         >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
                         </button>
-                        <h2 className="font-bold text-gray-800">{problemData?.title || '請選擇題目'}</h2>
+                        <h2 className="font-bold text-gray-800 flex items-center gap-2">
+                            {problemData?.title || '請選擇題目'}
+                            {timeStatus === 'ended' && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-xs rounded border border-red-200">Time's Up</span>}
+                            {timeStatus === 'not_started' && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded border border-yellow-200">未開始 (Not Started)</span>}
+                        </h2>
                     </div>
                 </div>
 
@@ -726,7 +791,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                         ref={chatContainerRef}
                                                         className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
                                                     >
-                                                        {logicChatState.chat_log.map((msg, idx) => (
+                                                        {Array.isArray(logicChatState.chat_log) && logicChatState.chat_log.map((msg, idx) => (
                                                             <div
                                                                 key={idx}
                                                                 className={`flex ${msg.role === 'student' ? 'justify-end' : 'justify-start'}`}
@@ -735,7 +800,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                                     ? 'bg-blue-500 text-white rounded-br-md'
                                                                     : 'bg-white border border-gray-200 text-gray-800 rounded-bl-md shadow-sm'
                                                                     }`}>
-                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                                                                    <p className="text-sm whitespace-pre-wrap leading-relaxed break-words break-all">{msg.content || ''}</p>
                                                                 </div>
                                                             </div>
                                                         ))}
@@ -756,7 +821,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                     {!logicChatState.is_completed ? (
                                                         <div className="border-t border-gray-200 bg-white">
                                                             {/* Suggested Replies 提示選項 */}
-                                                            {suggestedReplies.length > 0 && (
+                                                            {Array.isArray(suggestedReplies) && suggestedReplies.length > 0 && (
                                                                 <div className="px-4 pt-3 flex flex-wrap gap-2">
                                                                     {suggestedReplies.map((reply, idx) => (
                                                                         <button
@@ -778,23 +843,23 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                                                                     onChange={(e) => setChatInput(e.target.value)}
                                                                     onKeyDown={handleKeyDown}
                                                                     onCompositionStart={() => setIsComposing(true)}
-                                                                    onCompositionEnd={(e) => {
+                                                                    onCompositionEnd={() => {
                                                                         setIsComposing(false);
                                                                     }}
-                                                                    placeholder="輸入您的回答..."
-                                                                    className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all"
+                                                                    placeholder={timeStatus === 'not_started' ? "考試尚未開始。" : timeStatus === 'ended' ? "時間已結束" : "輸入您的回答..."}
+                                                                    className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
                                                                     rows={2}
-                                                                    disabled={isSendingChat}
+                                                                    disabled={isSendingChat || timeStatus !== 'active'}
                                                                 />
                                                                 <button
                                                                     onClick={() => handleSendChat()}
-                                                                    disabled={!chatInput.trim() || isSendingChat}
+                                                                    disabled={!chatInput.trim() || isSendingChat || timeStatus !== 'active'}
                                                                     // 修改 2: 
                                                                     // - 移除 'self-end' (讓高度跟隨 flex 容器撐開，即與 textarea 等高)
                                                                     // - 加入 'h-auto flex items-center justify-center' (確保高度自動適應且文字置中)
                                                                     className="px-4 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium text-sm h-auto flex items-center justify-center"
                                                                 >
-                                                                    Send
+                                                                    {timeStatus === 'active' ? 'Send' : 'Locked'}
                                                                 </button>
                                                             </div>
                                                         </div>

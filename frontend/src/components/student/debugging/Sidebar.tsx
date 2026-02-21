@@ -24,15 +24,16 @@ interface SidebarProps {
 }
 
 const STATIC_CHAPTERS: Chapter[] = [
-    // { id: "C1", title: "Chapter 1: 變數與輸入輸出" },
-    { id: "CAMP", title: "Winter Camp: 基礎題" },
-    // { id: "C2", title: "Chapter 2: 數值資料與字串資料" },
-    // { id: "C3", title: "Chapter 3: List串列資料型態" },
-    // { id: "C4", title: "Chapter 4: if條件判斷" },
-    // { id: "C5", title: "Chapter 5: for迴圈" },
-    // { id: "C6", title: "Chapter 6: while迴圈" },
-    // { id: "C7", title: "Chapter 7: dict字典" },
-    // { id: "C8", title: "Chapter 8: 函式定義與應用" },
+    { id: "C1", title: "Chapter 1: 變數與輸入輸出" },
+    { id: "C2", title: "Chapter 2: 數值資料與字串資料" },
+    { id: "C3", title: "Chapter 3: List串列資料型態" },
+    { id: "C4", title: "Chapter 4: if條件判斷" },
+    { id: "C5", title: "Chapter 5: for迴圈" },
+    { id: "C6", title: "Chapter 6: while迴圈" },
+    { id: "MID", title: "期中考" },
+    { id: "C7", title: "Chapter 7: dict字典" },
+    { id: "C8", title: "Chapter 8: 函式定義與應用" },
+    { id: "FINAL", title: "期末考" },
 ];
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, selectedProblemId, onSelectProblem }) => {

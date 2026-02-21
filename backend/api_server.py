@@ -6,7 +6,7 @@ from fastapi.responses import RedirectResponse
 from backend.app.routers import auth_router
 from backend.app.routers import debugging
 from backend.app.routers import dashboard 
-
+from backend.app.routers import teacher_problem
 # Import queues for initialization
 from backend.app.agents.debugging.OJ.queue_manager import analysis_queue
 
@@ -71,7 +71,11 @@ app.include_router(debugging.router)
 app.include_router(auth_router.router)
 
 # Dashboard router (教師儀表板)
+# Dashboard router (教師儀表板)
 app.include_router(dashboard.router)
+
+# Teacher Problem Management Router (題目生成與設定)
+app.include_router(teacher_problem.router)
 
 # To run this server:
 # 1. Make sure you are in the root directory of the project (Cook.ai).

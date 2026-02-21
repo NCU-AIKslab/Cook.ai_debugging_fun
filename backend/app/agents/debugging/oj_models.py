@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, Text, JSON, DateTime, String, Table, Met
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from datetime import datetime
 import os
 
@@ -29,9 +29,16 @@ problem_table = Table(
     Column("output_description", Text),
     Column("samples", JSON),
     Column("create_time", DateTime),
-    # 若資料庫中還有判題用的欄位，也可在此補上，例如：
-    # Column("test_cases", JSON),
-    # Column("time_limit", Integer),
+    # New columns
+    Column("hint", Text),
+    Column("test_cases", JSON),
+    Column("time_limit", Integer, default=1000),
+    Column("memory_limit", Integer, default=256),
+    Column("judge_type", String, default="custom"),
+    Column("entry_point", String),
+    Column("start_time", DateTime),
+    Column("end_time", DateTime),
+    Column("solution_code", Text), # For reference / architecture generation
     schema="debugging",     # 指定 schema
     extend_existing=True,   # 允許覆蓋既有定義
 )
@@ -52,7 +59,35 @@ class Problem(Base):
             "output_description": self.output_description,
             "samples": self.samples,
             "create_time": self.create_time.isoformat() if self.create_time else None,
+            "hint": self.hint,
+            "test_cases": self.test_cases,
+            "time_limit": self.time_limit,
+            "memory_limit": self.memory_limit,
+            "judge_type": self.judge_type,
+            "entry_point": self.entry_point,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "solution_code": self.solution_code,
         }
+
+# ==========================================
+# 2.5 定義 PrecodingQuestion (對應生成題目)
+# ==========================================
+precoding_question_table = Table(
+    "precoding_question",
+    metadata,
+    Column("problem_id", String, primary_key=True),
+    Column("logic_question", JSON),         # 邏輯建構題
+    Column("error_code_question", JSON),    # 程式除錯題
+    Column("explain_code_question", JSON),  # 程式解釋題
+    Column("correct_code_template", JSON),  # 程式架構題
+    Column("created_at", DateTime, default=datetime.utcnow),
+    schema="debugging",
+    extend_existing=True,
+)
+
+class PrecodingQuestion(Base):
+    __table__ = precoding_question_table
 
 # ==========================================
 # 3. 查詢邏輯 (欄位名稱已更新為 problem_id)
@@ -61,28 +96,20 @@ class Problem(Base):
 def get_problems_by_chapter(chapter_id, start_time=None, end_time=None):
     session = Session()
     try:
-        # 默認範圍設定
-        if not start_time:
-            start_time = "2025-08-14T00:00:00"
-        if isinstance(start_time, str):
-            start_time = datetime.fromisoformat(start_time)
-        if end_time and isinstance(end_time, str):
-            end_time = datetime.fromisoformat(end_time)
+        # 當前時間
+        now = datetime.now()
         
-        if chapter_id == 'C1':
-            # 注意：這裡改用 self.problem_id 或類別屬性 Problem.problem_id
-            print('##########', Problem.problem_id)
-            
         # 查詢符合條件的題目 (將 _id 改為 problem_id)
-        query = session.query(Problem.problem_id, Problem.title, Problem.create_time).filter(
+        # 邏輯變更: start_time 與 end_time 用於控制題目「是否可見」
+        # 可見條件: (Problem.start_time IS NULL OR Problem.start_time <= NOW) AND (Problem.end_time IS NULL OR Problem.end_time >= NOW)
+        
+        query = session.query(Problem.problem_id, Problem.title, Problem.create_time, Problem.start_time, Problem.end_time).filter(
             and_(
                 Problem.problem_id.like(f"{chapter_id}_%"),
-                Problem.create_time >= start_time,
+                # Visibility Logic: Hide if start_time is in the future. Show everything else (including ended).
+                or_(Problem.start_time == None, Problem.start_time <= now)
             )
         )
-        
-        if end_time:
-            query = query.filter(Problem.create_time <= end_time)
             
         problems = query.order_by(Problem.problem_id.asc()).all()
         
@@ -91,7 +118,9 @@ def get_problems_by_chapter(chapter_id, start_time=None, end_time=None):
             {
                 "_id": p.problem_id, 
                 "title": p.title, 
-                "create_time": p.create_time.isoformat() if p.create_time else None
+                "create_time": p.create_time.isoformat() if p.create_time else None,
+                "start_time": p.start_time.isoformat() if p.start_time else None,
+                "end_time": p.end_time.isoformat() if p.end_time else None
             } 
             for p in problems
         ]
@@ -111,8 +140,12 @@ def get_problem_by_id(problem_id):
         # 將結果轉換為字典
         data = problem.to_dict()
 
-        # 解析 samples 欄位
-        data["samples"] = [{"input": s.get("input"), "output": s.get("output")} for s in data.get("samples", [])]
+        # 解析 samples 欄位 (Ensure samples is a list)
+        samples_data = data.get("samples")
+        if samples_data and isinstance(samples_data, list):
+            data["samples"] = [{"input": s.get("input"), "output": s.get("output")} for s in samples_data]
+        else:
+            data["samples"] = []
 
         return data
     finally:

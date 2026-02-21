@@ -7,6 +7,7 @@ import StudentPortal from './pages/Student';
 import StudentPreCoding from './pages/student/debugging/StudentPreCoding';
 import StudentCodingHelp from './pages/student/debugging/StudentCodingHelp';
 import StudentProgress from './pages/teacher/StudentProgress';
+import ProblemGeneration from './pages/teacher/ProblemGeneration';
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
         <Route path="/teacher" element={<StudentPortal />}>
           <Route index element={<Navigate to="/teacher/student-progress" replace />} />
           <Route path="student-progress" element={<StudentProgress />} />
+          <Route path="problem-generation" element={<ProblemGeneration />} />
         </Route>
       </Routes>
     </UserProvider>

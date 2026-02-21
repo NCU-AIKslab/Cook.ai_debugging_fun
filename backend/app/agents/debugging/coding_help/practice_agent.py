@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from backend.app.agents.debugging.db import save_llm_charge
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,9 @@ llm = ChatOpenAI(model="gpt-5.1", temperature=0.2, request_timeout=120, max_retr
 async def generate_practice_questions(
     previous_reports: List[Dict],
     problem_info: Dict[str, str],
-    current_report: Dict[str, Any] = None
+    current_report: Dict[str, Any] = None,
+    student_id: str = None,
+    problem_id: str = None,
 ) -> List[Dict[str, Any]]:
     """
     根據學生的錯誤歷史生成練習選擇題
@@ -64,8 +67,9 @@ async def generate_practice_questions(
     1. **單一核心**：只針對一個具體的邏輯誤解。
     2. **簡潔描述**：題目敘述不超過 60 字，直接切入核心矛盾。
     3. **純文字選項**：選項內容必須是「自然語言邏輯描述」，禁止在選項中出現程式碼。
-    4. **排除模糊**：確保正確選項有唯一的邏輯標準，錯誤選項必須是學生常犯的邏輯陷阱。
-    5. **展示程式碼**：題目中可包含一段短小（10行內）的範例程式碼作為背景。
+    4. 選項feedback：簡單明瞭，不超過 20 字。
+    5. **排除模糊**：確保正確選項有唯一的邏輯標準，錯誤選項必須是學生常犯的邏輯陷阱。
+    6. **展示程式碼**：題目中可包含一段短小（10行內）的範例程式碼作為背景。
 
     格式規範 (JSON Array):
     [
@@ -94,7 +98,19 @@ async def generate_practice_questions(
         
         content = response.content.replace("```json", "").replace("```", "").strip()
         practice_q = json.loads(content)
-        
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="practice",
+                model_name="gpt-5.1",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         if isinstance(practice_q, list):
             return practice_q
         else:
@@ -111,7 +127,9 @@ async def generate_practice_questions(
 async def run_practice_generation(
     previous_reports: List[Dict],
     problem_info: Dict[str, str],
-    current_report: Dict[str, Any] = None
+    current_report: Dict[str, Any] = None,
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     執行練習題生成流程
@@ -122,7 +140,9 @@ async def run_practice_generation(
     practice_questions = await generate_practice_questions(
         previous_reports=previous_reports,
         problem_info=problem_info,
-        current_report=current_report
+        current_report=current_report,
+        student_id=student_id,
+        problem_id=problem_id,
     )
     
     return {

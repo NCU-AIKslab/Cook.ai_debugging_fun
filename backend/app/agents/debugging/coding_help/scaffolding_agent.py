@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, Text, JSON
 from pgvector.sqlalchemy import Vector
+from backend.app.agents.debugging.db import save_llm_charge
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class DocumentChunk(Base):
 
 # 初始化 LLM (增加逾時與重試設定以提升穩定性)
 llm = ChatOpenAI(model="gpt-5.1", temperature=0.3, request_timeout=120, max_retries=3)
+llm2 = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, request_timeout=120, max_retries=3)
 embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)
 
 
@@ -83,7 +85,9 @@ def get_relevant_documents(query: str, top_k: int = 3) -> List[str]:
 
 
 async def decide_retrieval(
-    evidence_report: Dict[str, Any]
+    evidence_report: Dict[str, Any],
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     獨立的 Router Agent：判斷是否需要檢索教材
@@ -117,14 +121,26 @@ async def decide_retrieval(
     """
     
     try:
-        response = await llm.ainvoke([
+        response = await llm2.ainvoke([
             SystemMessage(content="你是教學資源規劃專家。請只輸出 JSON。"),
             HumanMessage(content=prompt)
         ])
         
         content = response.content.replace("```json", "").replace("```", "").strip()
         result = json.loads(content)
-        
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="code_correction",
+                model_name="gpt-4o-mini",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         return {
             "datasource": result.get("datasource", "no_retrieval"),
             "search_query": result.get("search_query", ""),
@@ -145,7 +161,9 @@ async def generate_scaffold_response(
     evidence_report: Dict[str, Any],
     problem_info: Dict[str, str],
     current_code: str,
-    retrieved_docs: List[str] = None
+    retrieved_docs: List[str] = None,
+    student_id: str = None,
+    problem_id: str = None,
 ) -> str:
     """
     依據 ZPD Level 生成引導式回覆
@@ -187,14 +205,28 @@ async def generate_scaffold_response(
     【教學策略 (ZPD 等級 {zpd_level})】: {strategy}
     
     請遵守：
-    1. 使用繁體中文，**簡單明瞭**，條列式回覆，不帶任何情緒。
-    2. 嚴禁使用 Markdown 語法 (不要使用 **, #, ` 等符號)。
-    3. 依照策略強度提供引導，不要直接給出完整正確答案。
-    4. 回覆應該是 2-4 個條列式重點。
+    1. 使用繁體中文，**簡單明瞭字數100字內**，條列式回覆，不帶任何情緒。
+    2. 不要給學生參考教材來源資訊(例如：可參考C1 PPT第X頁)。
+    3. 嚴禁使用 Markdown 語法 (不要使用 **, #, ` 等符號)。
+    4. 依照策略強度提供引導，不要直接給出完整正確答案。
+    5. 回覆應該是 2-4 個條列式重點。
     """
     
     try:
         response = await llm.ainvoke([HumanMessage(content=prompt)])
+        # 記錄 token 用量
+        if student_id:
+            usage = response.response_metadata.get("token_usage", {})
+            details = usage.get("prompt_tokens_details") or {}
+            save_llm_charge(
+                student_id=student_id,
+                usage_type="code_correction",
+                model_name="gpt-5.1",
+                input_tokens=usage.get("prompt_tokens", 0),
+                cached_input_tokens=details.get("cached_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                problem_id=problem_id,
+            )
         return response.content
         
     except Exception as e:
@@ -206,7 +238,9 @@ async def run_scaffolding(
     zpd_level: int,
     evidence_report: Dict[str, Any],
     problem_info: Dict[str, str],
-    current_code: str
+    current_code: str,
+    student_id: str = None,
+    problem_id: str = None,
 ) -> Dict[str, Any]:
     """
     執行完整 Scaffolding 流程
@@ -215,7 +249,7 @@ async def run_scaffolding(
         包含 response 和 retrieved_docs 的結果
     """
     # Step 1: 決定是否需要檢索
-    route_result = await decide_retrieval(evidence_report)
+    route_result = await decide_retrieval(evidence_report, student_id=student_id, problem_id=problem_id)
     
     # Step 2: 執行檢索 (如果需要)
     retrieved_docs = []
@@ -228,7 +262,9 @@ async def run_scaffolding(
         evidence_report=evidence_report,
         problem_info=problem_info,
         current_code=current_code,
-        retrieved_docs=retrieved_docs
+        retrieved_docs=retrieved_docs,
+        student_id=student_id,
+        problem_id=problem_id,
     )
     
     return {

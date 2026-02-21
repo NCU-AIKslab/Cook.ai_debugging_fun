@@ -16,7 +16,7 @@ from ..db import (
     precoding_student_answers_table  # Legacy table for 403 fix
 )
 from ..oj_models import get_problem_by_id
-from .agents import UnderstandingAgent, DecompositionAgent, generate_opening_question
+from .agents import UnderstandingAgent, DecompositionAgent, InputFilterAgent, generate_opening_question
 
 
 class PreCodingManager:
@@ -164,6 +164,40 @@ class PreCodingManager:
         # Get problem context
         problem_info = get_problem_by_id(problem_id) or {}
         
+        # --- 輸入驗證：無效輸入不記錄到 DB，但前端仍顯示 ---
+        is_valid, reason = await InputFilterAgent.check(
+            message, student_id=student_id, problem_id=problem_id
+        )
+        if not is_valid:
+            # 建立臨時 chat_log（僅供前端顯示，不寫入 DB）
+            now = datetime.now(timezone.utc)
+            temp_chat_log = list(chat_log)  # 複製一份，不影響原始資料
+            temp_chat_log.append({
+                "role": "student",
+                "content": message,
+                "stage": current_stage,
+                "score": current_score,
+                "timestamp": now.isoformat()
+            })
+            temp_chat_log.append({
+                "role": "agent",
+                "content": reason,
+                "stage": current_stage,
+                "score": current_score,
+                "timestamp": now.isoformat(),
+                "suggested_replies": []
+            })
+            # 不更新 DB，直接回傳含臨時訊息的 chat_log
+            return {
+                "reply": reason,
+                "current_stage": current_stage,
+                "current_score": current_score,
+                "is_completed": False,
+                "chat_log": temp_chat_log,
+                "suggested_replies": []
+            }
+        # --- 驗證通過，正常流程 ---
+        
         # Append student message to log
         now = datetime.now(timezone.utc)
         chat_log.append({
@@ -182,7 +216,8 @@ class PreCodingManager:
         
         if current_stage == "UNDERSTANDING":
             reply, score, should_transition, has_decomposition, suggested_replies = await UnderstandingAgent.evaluate(
-                chat_log, problem_info
+                chat_log, problem_info,
+                student_id=student_id, problem_id=problem_id
             )
             agent_reply = reply
             new_score = max(current_score, score)  # Score can only go up
@@ -207,7 +242,8 @@ class PreCodingManager:
                     
         elif current_stage == "DECOMPOSITION":
             reply, score, is_stage_complete, suggested_replies = await DecompositionAgent.evaluate(
-                chat_log, problem_info
+                chat_log, problem_info,
+                student_id=student_id, problem_id=problem_id
             )
             agent_reply = reply
             new_score = max(current_score, score)
