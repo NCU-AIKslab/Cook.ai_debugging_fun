@@ -95,61 +95,62 @@ async def validate_input(
             "reason": "請輸入有意義的問題，不要只輸入亂碼或符號。",
             "sanitized_input": ""
         }
-    
-    # 4. 使用 LLM 進行更深層的驗證
-    prompt = f"""
-    你是輸入驗證專家。你只輸出 JSON。判斷輸入是否有效。
-        【無效輸入類型】
-        - 無效輸入：
-        1. 亂打的字元/鍵盤亂按 (如: "asdfghjkl", "!@#$%")
-        2. 空白或只有標點符號
-
-        注意：
-        - 使用者描述問題、回報 bug、詢問系統行為，不算一般閒聊，應判為有效。
-        - 單一數字（包含 0）可能是合法答案，不能因為短就判無效。
-    
-        請輸出 JSON:
-        {{
-            "is_valid": true/false,
-            "reason": "判斷理由"
-        }}
-    """
-    
-    try:
-        response = await llm2.ainvoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=cleaned)
-        ])
-        
-        content = response.content.replace("```json", "").replace("```", "").strip()
-        result = json.loads(content)
-        # 記錄 token 用量
-        if student_id:
-            usage = response.response_metadata.get("token_usage", {})
-            details = usage.get("prompt_tokens_details") or {}
-            save_llm_charge(
-                student_id=student_id,
-                usage_type="code_correction",
-                model_name="gpt-4o-mini",
-                input_tokens=usage.get("prompt_tokens", 0),
-                cached_input_tokens=details.get("cached_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
-                problem_id=problem_id,
-            )
-        return {
-            "is_valid": result.get("is_valid", True),
-            "reason": result.get("reason", ""),
-            "sanitized_input": cleaned if result.get("is_valid", True) else ""
-        }
-        
-    except Exception as e:
-        logger.error(f"Input validation LLM error: {e}")
-        # Fallback: 如果 LLM 驗證失敗，允許通過
-        return {
+    return  {
             "is_valid": True,
-            "reason": "LLM 驗證跳過",
+            "reason": "",
             "sanitized_input": cleaned
         }
+    # # 4. 使用 LLM 進行更深層的驗證
+    # prompt = f"""
+    # 你是輸入驗證專家。你只輸出 JSON。判斷輸入是否有效。
+    #     【無效輸入類型】
+    #     - 無效輸入：
+    #     1. 亂打的字元/鍵盤亂按 (如: "asdfghjkl", "!@#$%")
+    #     2. 空白或只有標點符號
+
+    
+    #     請輸出 JSON:
+    #     {{
+    #         "is_valid": true/false,
+    #         "reason": "判斷理由"
+    #     }}
+    # """
+    
+    # try:
+    #     response = await llm2.ainvoke([
+    #         SystemMessage(content=prompt),
+    #         HumanMessage(content=cleaned)
+    #     ])
+        
+    #     content = response.content.replace("```json", "").replace("```", "").strip()
+    #     result = json.loads(content)
+    #     # 記錄 token 用量
+    #     if student_id:
+    #         usage = response.response_metadata.get("token_usage", {})
+    #         details = usage.get("prompt_tokens_details") or {}
+    #         save_llm_charge(
+    #             student_id=student_id,
+    #             usage_type="code_correction",
+    #             model_name="gpt-4o-mini",
+    #             input_tokens=usage.get("prompt_tokens", 0),
+    #             cached_input_tokens=details.get("cached_tokens", 0),
+    #             output_tokens=usage.get("completion_tokens", 0),
+    #             problem_id=problem_id,
+    #         )
+    #     return {
+    #         "is_valid": result.get("is_valid", True),
+    #         "reason": result.get("reason", ""),
+    #         "sanitized_input": cleaned if result.get("is_valid", True) else ""
+    #     }
+        
+    # except Exception as e:
+    #     logger.error(f"Input validation LLM error: {e}")
+    #     # Fallback: 如果 LLM 驗證失敗，允許通過
+    #     return {
+    #         "is_valid": True,
+    #         "reason": "LLM 驗證跳過",
+    #         "sanitized_input": cleaned
+    #     }
 
 
 async def generate_chat_response(
