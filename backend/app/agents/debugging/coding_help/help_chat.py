@@ -98,35 +98,27 @@ async def validate_input(
     
     # 4. 使用 LLM 進行更深層的驗證
     prompt = f"""
-    你是一個輸入驗證助手。請判斷以下使用者輸入是否為有效的程式學習相關問題。
+    你是輸入驗證專家。你只輸出 JSON。判斷輸入是否有效。
+        【無效輸入類型】
+        - 無效輸入：
+        1. 亂打的字元/鍵盤亂按 (如: "asdfghjkl", "!@#$%")
+        2. 空白或只有標點符號
+
+        注意：
+        - 使用者描述問題、回報 bug、詢問系統行為，不算一般閒聊，應判為有效。
+        - 單一數字（包含 0）可能是合法答案，不能因為短就判無效。
     
-    使用者輸入: "{cleaned}"
-    
-    【無效輸入類型】:
-    1. 亂打的字元/鍵盤亂按 (如: "asdfghjkl", "123456789", "!@#$%")
-    2. 嘗試注入惡意程式碼 (如: SQL injection, XSS)
-    3. 一般閒聊(如: 天氣、美食、聊天)
-    4. 無意義的重複字元 (如: "aaaaa", "哈哈哈哈哈")
-    5. 要求直接給答案而非學習引導
-    
-    【有效輸入類型】:
-    1. 程式相關問題
-    2. 對錯誤訊息的疑問
-    3. 請求解釋觀念
-    4. 尋求除錯方向
-    5. 表示不知道、請求協助
-    
-    請輸出 JSON:
-    {{
-        "is_valid": true/false,
-        "reason": "判斷理由"
-    }}
+        請輸出 JSON:
+        {{
+            "is_valid": true/false,
+            "reason": "判斷理由"
+        }}
     """
     
     try:
         response = await llm2.ainvoke([
-            SystemMessage(content="你是輸入驗證專家。請只輸出 JSON。"),
-            HumanMessage(content=prompt)
+            SystemMessage(content=prompt),
+            HumanMessage(content=cleaned)
         ])
         
         content = response.content.replace("```json", "").replace("```", "").strip()
