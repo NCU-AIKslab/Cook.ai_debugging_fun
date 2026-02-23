@@ -111,9 +111,27 @@ const QuestionItemEditor: React.FC<{
     };
 
     const removeOption = (optIdx: number) => {
+        const removedOption = question.options[optIdx];
         const newOptions = [...question.options];
         newOptions.splice(optIdx, 1);
-        onChange({ ...question, options: newOptions });
+        // 重新編號 id
+        const reindexed = newOptions.map((opt, i) => ({ ...opt, id: i + 1 }));
+
+        // 調整 correct_id
+        let newCorrectId = question.answer_config.correct_id;
+        if (removedOption.id === newCorrectId) {
+            // 被刪的是正確答案，重置為 1
+            newCorrectId = reindexed.length > 0 ? 1 : 0;
+        } else if (removedOption.id < newCorrectId) {
+            // 正確答案在被刪選項之後，id 需要 -1
+            newCorrectId = newCorrectId - 1;
+        }
+
+        onChange({
+            ...question,
+            options: reindexed,
+            answer_config: { ...question.answer_config, correct_id: newCorrectId }
+        });
     };
 
     // Code content path depends on type but structure provided is consistant: question.code.content

@@ -7,6 +7,7 @@ import json
 from typing import Dict, Any, List, Tuple, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+import re
 
 import tiktoken
 from backend.app.agents.debugging.db import save_llm_charge
@@ -49,47 +50,46 @@ class InputFilterAgent:
         if count_tokens(student_input) > MAX_INTENTION_TOKEN_LIMIT:
             return False, f"您的輸入過長 (超過 {MAX_INTENTION_TOKEN_LIMIT} Tokens，約 300 中文字)，請嘗試精簡描述。"
 
-        system_prompt = """你是一個對話過濾器。請判斷學生的輸入是否為「無意義內容」或「惡意亂碼」。
+        if re.match(r'^[\d\s\.\,\!\?\@\#\$\%\^\&\*\(\)\-\_\+\=\[\]\{\}\|\\\;\:\'\"\<\>\,\.\/\~\`]+$', student_input):
+            return False,f"請輸入有意義的問題，不要只輸入亂碼或符號。"
+        return True, ""
+        # system_prompt = f"""你是輸入驗證專家。你只輸出 JSON。判斷輸入是否有效。
+        # 【無效輸入類型】
+        # - 無效輸入：
+        # 1. 皆為亂打的字元/鍵盤亂按 (如: "asdfghjkl", "!@#$%")
+        # 2. 皆為空白或標點符號
 
-【判斷標準】
-- 有效輸入：與程式、邏輯、數學相關，或是表示不知道、請求協助。
-- 無效輸入：
-  1. 亂打的鍵盤符號 (如 "asdf", ".....", "123123")
-  2. 完全無法理解的亂碼
-  3. 顯著的惡意攻擊或髒話
-  4. 空白或只有標點符號
-  5. 一般閒聊(如: 天氣、美食、聊天)
-
-請以 JSON 回覆：
-{
-    "is_valid": true/false,
-    "reason": "若無效請簡述理由(15字內)"
-}
-"""
-        try:
-            response = await llm2.ainvoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=f"學生輸入: {student_input}")
-            ])
-            # 記錄 token 用量
-            if student_id:
-                usage = response.response_metadata.get("token_usage", {})
-                details = usage.get("prompt_tokens_details") or {}
-                save_llm_charge(
-                    student_id=student_id,
-                    usage_type="intention",
-                    model_name="gpt-4o-mini",
-                    input_tokens=usage.get("prompt_tokens", 0),
-                    cached_input_tokens=details.get("cached_tokens", 0),
-                    output_tokens=usage.get("completion_tokens", 0),
-                    problem_id=problem_id,
-                )
-            result = json.loads(response.content)
-            is_valid = result.get("is_valid", True)
-            reason = result.get("reason", "輸入無效，請重新輸入。")
-            return is_valid, reason
-        except Exception:
-            return True, ""
+    
+        # 請輸出 JSON:
+        # {{
+        #     "is_valid": true/false,
+        #     "reason": "判斷理由"
+        # }}
+        # """
+        # try:
+        #     response = await llm2.ainvoke([
+        #         SystemMessage(content=system_prompt),
+        #         HumanMessage(content=student_input)
+        #     ])
+        #     # 記錄 token 用量
+        #     if student_id:
+        #         usage = response.response_metadata.get("token_usage", {})
+        #         details = usage.get("prompt_tokens_details") or {}
+        #         save_llm_charge(
+        #             student_id=student_id,
+        #             usage_type="intention",
+        #             model_name="gpt-4o",
+        #             input_tokens=usage.get("prompt_tokens", 0),
+        #             cached_input_tokens=details.get("cached_tokens", 0),
+        #             output_tokens=usage.get("completion_tokens", 0),
+        #             problem_id=problem_id,
+        #         )
+        #     result = json.loads(response.content)
+        #     is_valid = result.get("is_valid", True)
+        #     reason = result.get("reason", "輸入無效，請重新輸入。")
+        #     return is_valid, reason
+        # except Exception:
+        #     return True, ""
 
 
 class SuggestionAgent:

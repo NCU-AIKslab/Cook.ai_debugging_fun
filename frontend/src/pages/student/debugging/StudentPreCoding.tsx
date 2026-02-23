@@ -445,7 +445,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
             setFeedbackMap(prev => {
                 const newMap = {
                     ...prev,
-                    [questionId]: { feedback, explanation }
+                    [`${stage}_${questionId}`]: { feedback, explanation }
                 };
                 localStorage.setItem(getStorageKey(selectedProblemId), JSON.stringify(newMap));
                 return newMap;
@@ -497,7 +497,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
         const allResponses = pcData.student_status[stage].filter(r => r.q_id === question.id);
         // 最新的作答 (最終狀態)
         const latestResponse = allResponses[allResponses.length - 1];
-        const feedbackData = feedbackMap[question.id];
+        const feedbackData = feedbackMap[`${stage}_${question.id}`];
 
         const isCorrect = latestResponse?.is_correct || false;
         const selectedId = latestResponse?.selected_option_id;
