@@ -132,7 +132,9 @@ export default function GoogleRegisterModal({
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-200">
-                    <h2 className="text-2xl font-bold text-gray-800">完成註冊</h2>
+                    <h2 className="text-2xl font-bold text-gray-800">
+                        {isTeacher ? '教師 Google 註冊' : '學生 Google 註冊'}
+                    </h2>
                     <button
                         onClick={onClose}
                         className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -161,9 +163,6 @@ export default function GoogleRegisterModal({
                         </div>
                     </div>
 
-                    <p className="text-sm text-gray-600 mb-6">
-                        您的 Google 帳號尚未註冊，請填寫以下資訊完成註冊：
-                    </p>
 
                     {/* 成功訊息 (教師審核) */}
                     {submitSuccess && (

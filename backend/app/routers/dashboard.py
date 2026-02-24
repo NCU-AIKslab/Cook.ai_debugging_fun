@@ -297,15 +297,17 @@ def get_coding_help_dashboard(problem_id: str = Query(..., description="Problem 
             # 2. 取得練習題狀態
             practice_stmt = select(
                 practice_table.c.student_id,
-                practice_table.c.answer_is_correct
+                practice_table.c.answer_is_correct,
+                practice_table.c.code_question
             ).where(practice_table.c.problem_id == problem_id)
             
             practice_rows = conn.execute(practice_stmt).fetchall()
             practice_map = {}
             for row in practice_rows:
                 mapping = row._mapping
-                # 可能有多筆，取最新的 (假設 answer_is_correct 會更新)
-                practice_map[mapping["student_id"]] = mapping["answer_is_correct"] or False
+                code_q = mapping["code_question"] or []
+                if code_q:  # 空陣列視為 no_practice，不放入 map → 顯示「—」
+                    practice_map[mapping["student_id"]] = mapping["answer_is_correct"] or False
             
             # 3. 整理學生資料與統計
             students = []

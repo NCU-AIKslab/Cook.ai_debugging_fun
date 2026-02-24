@@ -4,6 +4,7 @@ import API_BASE_URL from '../../config/api';
 interface RegisterFormProps {
   onSuccess?: (message: string) => void;
   onError?: (error: string) => void;
+  onRoleChange?: (role: 'student' | 'teacher') => void;
 }
 
 interface RegisterData {
@@ -20,7 +21,7 @@ interface RegisterResponse {
   message: string;
 }
 
-export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) {
+export default function RegisterForm({ onSuccess, onError, onRoleChange }: RegisterFormProps) {
   const [formData, setFormData] = useState({
     stu_id: '',
     stu_name: '',
@@ -119,6 +120,9 @@ export default function RegisterForm({ onSuccess, onError }: RegisterFormProps) 
   // 處理輸入變化
   const handleChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    if (field === 'role' && onRoleChange) {
+      onRoleChange(value as 'student' | 'teacher');
+    }
     if (errors[field]) {
       setErrors(prev => {
         const newErrors = { ...prev };

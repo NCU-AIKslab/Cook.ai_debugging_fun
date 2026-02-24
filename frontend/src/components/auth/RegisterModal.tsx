@@ -1,7 +1,7 @@
 // frontend/src/components/auth/RegisterModal.tsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
+
 import { useUser } from '../../contexts/UserContext';
 import API_BASE_URL from '../../config/api';
 import RegisterForm from './RegisterForm';
@@ -17,7 +17,6 @@ interface GoogleUserInfo {
   picture: string;
 }
 
-type RegisterMode = 'select' | 'google' | 'local';
 
 export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   const navigate = useNavigate();
@@ -26,8 +25,8 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // 註冊模式
-  const [registerMode, setRegisterMode] = useState<RegisterMode>('local');
+
+
 
   // 註冊表單狀態
   const [showRegisterForm, setShowRegisterForm] = useState(false);
@@ -44,6 +43,9 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
+  // 追蹤一般表單裡選的身分（用於標題顯示）
+  const [localRole, setLocalRole] = useState<'student' | 'teacher'>('student');
+
   if (!isOpen) return null;
 
   // 是否為教師
@@ -55,7 +57,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
     setShowRegisterForm(false);
     setGoogleUserInfo(null);
     setPendingGoogleToken(null);
-    setRegisterMode('select');
+    setLocalRole('student');
     setFormData({
       email: '',
       full_name: '',
@@ -67,75 +69,6 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
     onClose();
   };
 
-  // Google 登入成功 - 檢查是否已註冊
-  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
-    setErrorMessage('');
-    setIsLoading(true);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: credentialResponse.credential })
-      });
-
-      const data = await response.json();
-
-      // 處理 404 USER_NOT_FOUND - 需要先註冊
-      if (response.status === 404 && data.code === 'USER_NOT_FOUND') {
-        // 保存 Google 使用者資訊並顯示註冊表單
-        const googleUser = data.google_user || {};
-        setGoogleUserInfo({
-          email: googleUser.email || '',
-          name: googleUser.name || '',
-          picture: googleUser.picture || ''
-        });
-        setPendingGoogleToken(credentialResponse.credential || null);
-        setFormData(prev => ({
-          ...prev,
-          email: googleUser.email || '',
-          full_name: ''  // 姓名預設空白，不使用 Gmail 名字
-        }));
-        setShowRegisterForm(true);
-        setIsLoading(false);
-        return;
-      }
-
-      // 處理 503 服務錯誤
-      if (response.status === 503) {
-        throw new Error(data.detail || '中央驗證服務暫時無法使用');
-      }
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Google 登入失敗');
-      }
-
-      // 登入成功 - 使用者已經註冊
-      const userData = {
-        user_id: data.user_id,
-        full_name: data.full_name,
-        role: data.is_teacher ? 'teacher' : 'student',
-        access_token: data.access_token,
-        email: data.email,
-        identifier: data.identifier,
-        department: data.department
-      };
-
-      localStorage.setItem('user', JSON.stringify(userData));
-      setUser(userData);
-      onClose();
-      navigate(data.is_teacher ? '/teacher' : '/student');
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Google 登入失敗');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Google 登入失敗
-  const handleGoogleError = () => {
-    setErrorMessage('Google 驗證失敗');
-  };
 
   // 處理表單輸入變化
   const handleChange = (field: string, value: string) => {
@@ -258,7 +191,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
   // 一般註冊成功
   const handleLocalRegisterSuccess = (message: string) => {
     setSuccessMessage(message);
-    setRegisterMode('select');
+    setLocalRole('student');
   };
 
   // 一般註冊失敗
@@ -272,8 +205,9 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <h2 className="text-2xl font-bold text-gray-800">
-            {showRegisterForm ? '完成 Google 註冊' :
-              registerMode === 'local' ? '學生註冊' : '註冊'}
+            {showRegisterForm
+              ? (formData.role === 'teacher' ? '教師 Google 註冊' : '學生 Google 註冊')
+              : (localRole === 'teacher' ? '教師註冊' : '學生註冊')}
           </h2>
           <button
             onClick={handleClose}
@@ -463,6 +397,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
             <RegisterForm
               onSuccess={handleLocalRegisterSuccess}
               onError={handleLocalRegisterError}
+              onRoleChange={(role) => setLocalRole(role)}
             />
           )}
         </div>
