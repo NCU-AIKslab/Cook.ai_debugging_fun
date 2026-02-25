@@ -130,12 +130,13 @@ const StudentCodingHelp: React.FC = () => {
 
     const isProblemSelected = !!selectedProblemId;
 
-    // Time Limit Logic
+    // Time Limit Logic (教師不受限制)
+    const isTeacher = user?.role === 'teacher';
     const [timeStatus, setTimeStatus] = useState<'active' | 'not_started' | 'ended'>('active');
 
     useEffect(() => {
         const checkTimeStatus = () => {
-            if (!problemData) return;
+            if (!problemData || isTeacher) return; // 教師永遠 active，不受時間限制
             const now = new Date();
 
             if (problemData.start_time) {
@@ -160,7 +161,7 @@ const StudentCodingHelp: React.FC = () => {
         checkTimeStatus();
         const interval = setInterval(checkTimeStatus, 1000); // Check every second for immediate active/lock update
         return () => clearInterval(interval);
-    }, [problemData]);
+    }, [problemData, isTeacher]);
 
     useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages, isChatLoading]);
 
@@ -553,7 +554,8 @@ const StudentCodingHelp: React.FC = () => {
             const payload = {
                 problem_id: selectedProblemId,
                 student_id: student.stu_id,
-                code: studentCode
+                code: studentCode,
+                is_teacher: isTeacher
             };
             const response = await axios.post(`${API_BASE_URL}/debugging/submit`, payload);
             const { verdict, practice_question, submission_num: newSubNum } = response.data;

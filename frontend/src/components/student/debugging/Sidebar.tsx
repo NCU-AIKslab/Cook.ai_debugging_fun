@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import API_BASE_URL from '../../../config/api';
+import { useUser } from '../../../contexts/UserContext';
 
 interface Problem {
     _id: string;
@@ -37,6 +38,9 @@ const STATIC_CHAPTERS: Chapter[] = [
 ];
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, selectedProblemId, onSelectProblem }) => {
+    const { user } = useUser();
+    const isTeacher = user?.role === 'teacher';
+
     const [chapterProblems, setChapterProblems] = useState<Record<string, Problem[]>>({});
     const [expandedChapters, setExpandedChapters] = useState<Record<string, boolean>>({
         'C1': true
@@ -81,7 +85,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, selectedProblemId, onSelectPr
             await Promise.all(STATIC_CHAPTERS.map(async (chapter) => {
                 try {
                     const response = await axios.get(
-                        `${API_BASE_URL}/debugging/problems/chapter/${chapter.id}`
+                        `${API_BASE_URL}/debugging/problems/chapter/${chapter.id}`,
+                        { params: { is_teacher: isTeacher } }
                     );
                     fetchedData[chapter.id] = sortProblems(response.data);
                 } catch (error) {
@@ -92,7 +97,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, selectedProblemId, onSelectPr
             setChapterProblems(fetchedData);
         };
         fetchAllProblems();
-    }, []);
+    }, [isTeacher]);
 
     const toggleChapter = (chapterId: string) => {
         setExpandedChapters(prev => ({ ...prev, [chapterId]: !prev[chapterId] }));

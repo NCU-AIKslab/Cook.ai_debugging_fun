@@ -92,11 +92,12 @@ export default function ProblemGeneration() {
         { id: 'C8', label: 'C8: Function函式' },
     ];
 
-    const fetchProblem = async () => {
-        if (!problemId) return;
+    const fetchProblem = async (id?: string) => {
+        const targetId = id ?? problemId;
+        if (!targetId) return;
         setLoading(true);
         try {
-            const res = await axios.get(`${API_BASE_URL}/teacher/problem/${problemId}`);
+            const res = await axios.get(`${API_BASE_URL}/teacher/problem/${targetId}`);
             if (res.data.status === 'success') {
                 const data = res.data.data;
                 // Ensure samples is array
@@ -304,6 +305,7 @@ export default function ProblemGeneration() {
                         onChange={(e) => {
                             if (e.target.value) {
                                 setProblemId(e.target.value);
+                                fetchProblem(e.target.value); // 自動讀取，防止 problemId 與 problemData 不同步
                             }
                         }}
                         value={existingProblems.find(p => p.problem_id === problemId) ? problemId : ''}
@@ -329,7 +331,7 @@ export default function ProblemGeneration() {
                 </div>
 
                 <button
-                    onClick={fetchProblem}
+                    onClick={() => fetchProblem()}
                     className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
                     disabled={loading || !problemId}
                 >

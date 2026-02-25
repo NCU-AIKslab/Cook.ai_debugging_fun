@@ -56,6 +56,7 @@ class PreCodingSubmitRequest(BaseModel):
     stage: str               
     question_id: str         
     selected_option_id: int  
+    is_teacher: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -76,6 +77,7 @@ class PreCodingChatRequest(BaseModel):
     student_id: str
     problem_id: str
     message: str
+    is_teacher: bool = False
 
 def clean_markdown_filter(text: str) -> str:
     """去除字串中的 Markdown 標記語法"""
@@ -187,12 +189,13 @@ async def submit_code(
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found.")
     
-    # [新增] 檢查截止時間
-    now = datetime.now()
-    if problem.start_time and now < problem.start_time:
-         raise HTTPException(status_code=403, detail="Contest Not Started")
-    if problem.end_time and now > problem.end_time:
-         raise HTTPException(status_code=403, detail="Time Limit Exceeded: The submission deadline has passed.")
+    # [新增] 檢查截止時間（教師不受限制）
+    if not payload.is_teacher:
+        now = datetime.now()
+        if problem.start_time and now < problem.start_time:
+             raise HTTPException(status_code=403, detail="Contest Not Started")
+        if problem.end_time and now > problem.end_time:
+             raise HTTPException(status_code=403, detail="Time Limit Exceeded: The submission deadline has passed.")
         
     # 3. Execute Judge (必須等待)
     try:
@@ -390,9 +393,9 @@ def get_precoding_status_endpoint(
 @router.post("/precoding/submit")
 def submit_precoding_answer_endpoint(payload: PreCodingSubmitRequest):
     try:
-        # [新增] 檢查時間
+        # [新增] 檢查時間（教師不受限制）
         problem = load_problem_config(payload.problem_id)
-        if problem:
+        if problem and not payload.is_teacher:
             now = datetime.now()
             if problem.start_time and now < problem.start_time:
                 raise HTTPException(status_code=403, detail="Contest Not Started")
@@ -434,9 +437,9 @@ def get_precoding_logic_status_endpoint(
 async def precoding_logic_chat_endpoint(payload: PreCodingChatRequest):
     """處理學生的聊天訊息（Pre-Coding Logic 階段）"""
     try:
-        # [新增] 檢查時間
+        # [新增] 檢查時間（教師不受限制）
         problem = load_problem_config(payload.problem_id)
-        if problem:
+        if problem and not payload.is_teacher:
             now = datetime.now()
             if problem.start_time and now < problem.start_time:
                 raise HTTPException(status_code=403, detail="Contest Not Started")
@@ -529,10 +532,11 @@ def get_student_code_endpoint(student_id: str, problem_id: str):
 def list_problems_by_chapter_endpoint(
     chapter_id: str = Path(...),
     start_time: Optional[str] = Query(None),
-    end_time: Optional[str] = Query(None)
+    end_time: Optional[str] = Query(None),
+    is_teacher: bool = Query(False)
 ):
     try:
-        return get_problems_by_chapter(chapter_id, start_time=start_time, end_time=end_time)
+        return get_problems_by_chapter(chapter_id, start_time=start_time, end_time=end_time, is_teacher=is_teacher)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

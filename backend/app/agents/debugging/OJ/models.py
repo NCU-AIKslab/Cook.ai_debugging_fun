@@ -58,3 +58,4 @@ class CodePayload(BaseModel):
     problem_id: str
     student_id: str
     code: str
+    is_teacher: bool = False
