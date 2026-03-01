@@ -99,12 +99,13 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
     // Tab 狀態
     const [activeTab, setActiveTab] = useState<'concept' | 'implementation'>('concept');
 
-    // Time Status Logic
+    // Time Status Logic (教師不受限制)
+    const isTeacher = user?.role === 'teacher';
     const [timeStatus, setTimeStatus] = useState<'active' | 'not_started' | 'ended'>('active');
 
     useEffect(() => {
         const checkTimeStatus = () => {
-            if (!problemData) return;
+            if (!problemData || isTeacher) return; // 教師永遠 active，不受時間限制
             const now = new Date();
 
             if (problemData.start_time) {
@@ -129,7 +130,7 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
         checkTimeStatus();
         const interval = setInterval(checkTimeStatus, 1000); // Check every second for immediate active/lock update
         return () => clearInterval(interval);
-    }, [problemData]);
+    }, [problemData, isTeacher]);
 
     // 舊版 Pre-Coding 狀態
     const [pcData, setPcData] = useState<PreCodingState | null>(null);
@@ -333,7 +334,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
             const res = await axios.post(`${API_BASE_URL}/debugging/precoding/logic/chat`, {
                 student_id: student.stu_id,
                 problem_id: selectedProblemId,
-                message: userMessage
+                message: userMessage,
+                is_teacher: isTeacher
             });
 
             if (res.data.status === 'success') {
@@ -409,7 +411,8 @@ const PreCoding: React.FC<PreCodingProps> = ({ student: propStudent }) => {
                 problem_id: selectedProblemId,
                 stage: stage,
                 question_id: questionId,
-                selected_option_id: optionId
+                selected_option_id: optionId,
+                is_teacher: isTeacher
             });
 
             const { is_correct, feedback, explanation, next_stage, stage_completed } = res.data;

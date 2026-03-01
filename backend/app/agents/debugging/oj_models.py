@@ -93,7 +93,7 @@ class PrecodingQuestion(Base):
 # 3. 查詢邏輯 (欄位名稱已更新為 problem_id)
 # ==========================================
 
-def get_problems_by_chapter(chapter_id, start_time=None, end_time=None):
+def get_problems_by_chapter(chapter_id, start_time=None, end_time=None, is_teacher=False):
     session = Session()
     try:
         # 當前時間
@@ -101,15 +101,22 @@ def get_problems_by_chapter(chapter_id, start_time=None, end_time=None):
         
         # 查詢符合條件的題目 (將 _id 改為 problem_id)
         # 邏輯變更: start_time 與 end_time 用於控制題目「是否可見」
-        # 可見條件: (Problem.start_time IS NULL OR Problem.start_time <= NOW) AND (Problem.end_time IS NULL OR Problem.end_time >= NOW)
+        # 教師不受時間限制，可見所有題目；學生只見已開放的題目
         
-        query = session.query(Problem.problem_id, Problem.title, Problem.create_time, Problem.start_time, Problem.end_time).filter(
-            and_(
-                Problem.problem_id.like(f"{chapter_id}_%"),
-                # Visibility Logic: Hide if start_time is in the future. Show everything else (including ended).
-                or_(Problem.start_time == None, Problem.start_time <= now)
+        if is_teacher:
+            # 教師：顯示所有題目，不過濾時間
+            query = session.query(Problem.problem_id, Problem.title, Problem.create_time, Problem.start_time, Problem.end_time).filter(
+                Problem.problem_id.like(f"{chapter_id}_%")
             )
-        )
+        else:
+            # 學生：只顯示 start_time <= now 的題目
+            query = session.query(Problem.problem_id, Problem.title, Problem.create_time, Problem.start_time, Problem.end_time).filter(
+                and_(
+                    Problem.problem_id.like(f"{chapter_id}_%"),
+                    # Visibility Logic: Hide if start_time is in the future. Show everything else (including ended).
+                    or_(Problem.start_time == None, Problem.start_time <= now)
+                )
+            )
             
         problems = query.order_by(Problem.problem_id.asc()).all()
         
